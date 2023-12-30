@@ -4,8 +4,7 @@ import jax
 import jax.numpy as jnp
 
 
-# TODO: populate function that arranges data as expected by kernel and calls it
-# TODO: add `jax.custom_jvp` for calling correct kernel for fwd / bwd pass
+# TODO: complete reference implementation
 def mamba_ssm(
     u: jax.Array,
     delta: jax.Array,
@@ -19,7 +18,7 @@ def mamba_ssm(
     pass
 
 
-# TODO: add fused residual+norm layer
-# TODO: add `jax.custom_jvp` for calling correct kernel for fwd / bwd pass
+# TODO: add reference residual+norm layer
+# this could be better served as a regular layer
 def add_norm():
     pass

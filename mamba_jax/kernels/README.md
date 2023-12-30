@@ -17,3 +17,5 @@ The kernel will perform the following operations:
 
 For efficient training, we also define custom kernels for the backwards pass
 using `jax.custom_jvp`.
+
+*We also include kernels for a fused residual+norm layer
