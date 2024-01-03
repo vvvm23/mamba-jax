@@ -7,6 +7,8 @@ import jax
 import jax.numpy as jnp
 from einops import repeat
 
+from ...kernels.interface import KernelType, mamba_ssm
+
 
 # corresponds to implementation in:
 # https://github.com/state-spaces/mamba/blob/main/mamba_ssm/modules/mamba_simple.py
@@ -23,6 +25,8 @@ class MambaBlock(eqx.Module):
 
     use_kernel: bool = False
     layer_idx: int = None
+    dt_rank: int = 0  # TODO: sensible default
+    state_dim: int = 16
 
     def __init__(
         self,
@@ -48,16 +52,17 @@ class MambaBlock(eqx.Module):
         self.layer_idx = layer_idx
 
         inner_dim = int(expand * dim)
-        dt_rank = math.ceil(dim / 16) if dt_rank == "auto" else dt_rank
+        self.dt_rank = math.ceil(dim / 16) if dt_rank == "auto" else dt_rank
+        self.state_dim = state_dim
 
         key, subkey = jax.random.split(key)
-        self.in_proj = nn.Linear(dim, 2 * inner_dim, bias=bias, key=subkey)
+        self.in_proj = nn.Linear(dim, 2 * inner_dim, use_bias=bias, key=subkey)
 
         key, subkey = jax.random.split(key)
         self.conv1d = nn.Conv1d(
             in_channels=inner_dim,
             out_channels=inner_dim,
-            bias=conv_bias,
+            use_bias=conv_bias,
             kernel_size=kernel_size,
             groups=inner_dim,
             padding=kernel_size - 1,
@@ -65,20 +70,22 @@ class MambaBlock(eqx.Module):
         )
 
         key, subkey = jax.random.split(key)
-        self.x_proj = nn.Linear(inner_dim, dt_rank + state_dim * 2, bias=False, key=subkey)
+        self.x_proj = nn.Linear(inner_dim, self.dt_rank + state_dim * 2, use_bias=False, key=subkey)
 
         key, subkey = jax.random.split(key)
-        self.dt_proj = nn.Linear(dt_rank, inner_dim, bias=True, key=subkey)
+        self.dt_proj = nn.Linear(self.dt_rank, inner_dim, use_bias=True, key=subkey)
 
-        dt_init_std = dt_rank**-0.5 * dt_scale
+        dt_init_std = self.dt_rank**-0.5 * dt_scale
 
         key, subkey = jax.random.split(key)
         dt = jnp.exp(
             jax.random.uniform(subkey, (inner_dim,)) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
         )
-        dt = jnp.clip(dt, min=dt_init_floor)
+        dt = jnp.clip(dt, a_min=dt_init_floor)
         inv_dt = dt + jnp.log(-jnp.expm1(-dt))
 
+        # TODO: this will fail, replace with equinox custom param init
+        # https://docs.kidger.site/equinox/tricks/#custom-parameter-initialisation
         self.dt_proj.bias = inv_dt
 
         if dt_init == "constant":
@@ -99,11 +106,34 @@ class MambaBlock(eqx.Module):
         self.D = jnp.ones((inner_dim,))
 
         key, subkey = jax.random.split(key)
-        self.out_proj = nn.Linear(inner_dim, dim, bias=bias, key=subkey)
+        self.out_proj = nn.Linear(inner_dim, dim, use_bias=bias, key=subkey)
 
     def forward(self, x: jax.Array) -> jax.Array:
-        # TODO: forward pass that calls into kernel interface
-        pass
+        L, D = x.shape
+        x, z = jnp.split(self.in_proj(x), 2, axis=-1)
+
+        A = -jnp.exp(jnp.asarray(self.A_log, dtype=jnp.float32))
+
+        x = jax.nn.silu(self.conv1d(x)[..., :L])
+
+        dt, B, C = jnp.split(self.x_proj(x), [self.dt_rank, self.state_dim, self.state_dim], dim=-1)
+        dt = self.dt_proj(dt)
+
+        y = mamba_ssm(
+            x,
+            dt,
+            A,
+            B,
+            C,
+            D=D,
+            delta_bias=None,
+            delta_softplus=False,
+            mode=KernelType.PALLAS if self.use_kernel else KernelType.XLA,
+        )
+
+        y = y * jax.nn.silu(z)
+
+        return self.out_proj(y)
 
 
 class ResidualBlock(eqx.Module):
@@ -115,3 +145,21 @@ class ResidualBlock(eqx.Module):
         # TODO: add fused residual add +norm followed by mamba mixer
         # correspnds to `Block` in reference
         pass
+
+
+if __name__ == "__main__":
+    key = jax.random.PRNGKey(0)
+    model_key, input_key = jax.random.split(key)
+
+    D = 8
+    L = 16
+    model = MambaBlock(D, key=model_key)
+
+    x = jax.random.normal(input_key, (L, D))
+
+    y = model(x)
+
+    import ipdb
+
+    ipdb.set_trace()
+    print()
