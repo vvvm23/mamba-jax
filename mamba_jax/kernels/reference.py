@@ -20,11 +20,14 @@ def mamba_ssm(
 
     if delta_bias is not None:
         raise NotImplementedError("delta_bias not implemented yet.")
-    if delta_softplus:
-        raise NotImplementedError("delta_softplus is not implemented yet.")
 
     l, d_in = u.shape
     n = A.shape[1]
+
+    delta = jnp.asarray(delta, dtype=jnp.float32)
+
+    if delta_softplus:
+        delta = jax.nn.softplus(delta)
 
     delta_A = jnp.exp(einsum(delta, A, "l d_in, d_in n -> l d_in n"))
     delta_B_u = einsum(delta, B, u, "l d_in, l n, l d_in -> l d_in n")
@@ -39,7 +42,6 @@ def mamba_ssm(
 
     # don't do jax.lax.associative_scan as this will materialise full state and likely OOM
     _, y = jax.lax.scan(_scan_fn, init=x, xs=[delta_A, delta_B_u, C])
-    # import ipdb; ipdb.set_trace()
 
     y = y + u * D
     return y
