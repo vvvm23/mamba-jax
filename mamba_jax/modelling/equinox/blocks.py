@@ -23,6 +23,7 @@ class MambaBlock(eqx.Module):
 
     out_proj: nn.Linear
 
+    dtype: jnp.dtype = jnp.float32
     use_kernel: bool = False
     layer_idx: int = None
     dt_rank: int
@@ -50,6 +51,7 @@ class MambaBlock(eqx.Module):
         super().__init__()
         self.use_kernel = use_kernel
         self.layer_idx = layer_idx
+        self.dtype = dtype
 
         inner_dim = int(expand * dim)
         self.dt_rank = math.ceil(dim / 16) if dt_rank == "auto" else dt_rank
@@ -108,15 +110,18 @@ class MambaBlock(eqx.Module):
 
     def __call__(self, x: jax.Array) -> jax.Array:
         L, _ = x.shape
+        x = x.astype(dtype=self.dtype)
         x, z = jnp.split(jax.vmap(self.in_proj)(x), 2, axis=-1)
 
-        A = -jnp.exp(jnp.asarray(self.A_log, dtype=jnp.float32))
+        A = -jnp.exp(self.A_log.astype(dtype=jnp.float32))
 
         # TODO: update to just use these arrangement by default
+        x = x.astype(dtype=self.dtype)
         x = jnp.transpose(x)
         x = jax.nn.silu(self.conv1d(x))
         x = jnp.transpose(x)[:L]
 
+        x = x.astype(dtype=self.dtype)
         dt, B, C = jnp.split(jax.vmap(self.x_proj)(x), [self.dt_rank, self.state_dim + self.dt_rank], axis=-1)
 
         assert B.shape[-1] == self.state_dim
@@ -124,13 +129,14 @@ class MambaBlock(eqx.Module):
 
         dt = jax.vmap(self.dt_proj)(dt)
 
+        x = x.astype(dtype=self.dtype)
         y = mamba_ssm(
             x,
             dt,
             A,
             B,
             C,
-            D=self.D,
+            D=self.D.astype(dtype=jnp.float32),
             delta_bias=None,
             delta_softplus=True,
             mode=KernelType.PALLAS if self.use_kernel else KernelType.XLA,
@@ -138,12 +144,15 @@ class MambaBlock(eqx.Module):
 
         y = y * jax.nn.silu(z)
 
+        y = y.astype(dtype=self.dtype)
         return jax.vmap(self.out_proj)(y)
 
 
 class ResidualBlock(eqx.Module):
     mixer: MambaBlock
     norm: eqx.Module
+
+    res_dtype: jnp.dtype = jnp.float32
 
     def __init__(
         self,
@@ -152,8 +161,10 @@ class ResidualBlock(eqx.Module):
         norm_factory=nn.RMSNorm,
         fused_add_norm: bool = False,
         key: jax.random.PRNGKey = None,
+        res_dtype: jnp.dtype = jnp.float32,
     ):
         super().__init__()
+        self.res_dtype = res_dtype
         self.mixer = mixer_factory(dim, key=key)
         self.norm = norm_factory(dim)
 
@@ -162,10 +173,10 @@ class ResidualBlock(eqx.Module):
         # correspnds to `Block` in reference
         res = x if res is None else x + res
 
-        x = jax.vmap(self.norm)(res)  # TODO: cast dtype here?
+        x = jax.vmap(self.norm)(res.astype(dtype=self.norm.weight.dtype))
         x = self.mixer(x)
 
-        return x, res
+        return x, res.astype(dtype=self.res_dtype)
 
 
 if __name__ == "__main__":
@@ -177,9 +188,11 @@ if __name__ == "__main__":
     D = 32
     L = 2**20
 
-    mixer_cls = partial(MambaBlock)
+    mixer_cls = partial(MambaBlock, dtype=jnp.bfloat16)
     norm_cls = partial(nn.RMSNorm, eps=1e-5)
     model = ResidualBlock(D, mixer_cls, norm_cls, key=model_key)
+
+    model = jax.tree_util.tree_map(lambda x: x.astype(jnp.bfloat16) if eqx.is_array(x) else x, model)
 
     @jax.jit
     def test_fn():
