@@ -84,12 +84,6 @@ class MambaBlock(eqx.Module):
         dt = jnp.clip(dt, a_min=dt_init_floor)
         inv_dt = dt + jnp.log(-jnp.expm1(-dt))
 
-        # TODO: this will fail, replace with equinox custom param init
-        # https://docs.kidger.site/equinox/tricks/#custom-parameter-initialisation
-        # self.dt_proj.bias = inv_dt
-        import ipdb
-
-        ipdb.set_trace()
         self.dt_proj = eqx.tree_at(lambda l: l.bias, self.dt_proj, inv_dt)
 
         if dt_init == "constant":
@@ -101,9 +95,6 @@ class MambaBlock(eqx.Module):
             raise NotImplementedError
 
         self.dt_proj = eqx.tree_at(lambda l: l.weight, self.dt_proj, new_weight)
-        import ipdb
-
-        ipdb.set_trace()
 
         # S4D (diagonal) real initialisation
         A = repeat(jnp.arange(1, state_dim + 1), "n -> d n", d=inner_dim)
@@ -130,9 +121,6 @@ class MambaBlock(eqx.Module):
 
         dt = jax.vmap(self.dt_proj)(dt)
 
-        import ipdb
-
-        ipdb.set_trace()
         y = mamba_ssm(
             x,
             dt,
@@ -140,8 +128,8 @@ class MambaBlock(eqx.Module):
             B,
             C,
             D=self.D,
-            delta_bias=None,  # TODO: add delta bias here, multiply by weight @ dt.t outside (why??)
-            delta_softplus=False,
+            delta_bias=None,
+            delta_softplus=True,
             mode=KernelType.PALLAS if self.use_kernel else KernelType.XLA,
         )
 
@@ -173,7 +161,4 @@ if __name__ == "__main__":
 
     y = model(x)
 
-    import ipdb
-
-    ipdb.set_trace()
     print()
