@@ -25,8 +25,8 @@ class MambaBlock(eqx.Module):
 
     use_kernel: bool = False
     layer_idx: int = None
-    dt_rank: int = 0  # TODO: sensible default
-    state_dim: int = 16
+    dt_rank: int
+    state_dim: int
 
     def __init__(
         self,
@@ -86,20 +86,21 @@ class MambaBlock(eqx.Module):
 
         # TODO: this will fail, replace with equinox custom param init
         # https://docs.kidger.site/equinox/tricks/#custom-parameter-initialisation
-        self.dt_proj.bias = inv_dt
+        # self.dt_proj.bias = inv_dt
+        self.dt_proj = eqx.tree_at(lambda l: l.bias, self.dt_proj, inv_dt)
 
         if dt_init == "constant":
-            self.dt_proj.weight = jnp.zeros_like(self.dt_proj.weight) + dt_init_std
+            new_weight = jnp.zeros_like(self.dt_proj.weight) + dt_init_std
         elif dt_init == "random":
             key, subkey = jax.random.split(key)
-            self.dt_proj.weight = jax.random.uniform(
-                subkey, self.dt_proj.weight.shape, minval=-dt_init_std, maxval=dt_init_std
-            )
+            new_weight = jax.random.uniform(subkey, self.dt_proj.weight.shape, minval=-dt_init_std, maxval=dt_init_std)
         else:
             raise NotImplementedError
 
+        self.dt_proj = eqx.tree_at(lambda l: l.weight, self.dt_proj, new_weight)
+
         # S4D (diagonal) real initialisation
-        A = repeat(jnp.arange(state_dim + 1), "n -> d n", d=inner_dim) + 1
+        A = repeat(jnp.arange(state_dim), "n -> d n", d=inner_dim) + 1
 
         self.A_log = jnp.log(A)
 
@@ -108,16 +109,20 @@ class MambaBlock(eqx.Module):
         key, subkey = jax.random.split(key)
         self.out_proj = nn.Linear(inner_dim, dim, use_bias=bias, key=subkey)
 
-    def forward(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array) -> jax.Array:
         L, D = x.shape
-        x, z = jnp.split(self.in_proj(x), 2, axis=-1)
+        x, z = jnp.split(jax.vmap(self.in_proj)(x), 2, axis=-1)
 
         A = -jnp.exp(jnp.asarray(self.A_log, dtype=jnp.float32))
 
         x = jax.nn.silu(self.conv1d(x)[..., :L])
 
-        dt, B, C = jnp.split(self.x_proj(x), [self.dt_rank, self.state_dim, self.state_dim], dim=-1)
-        dt = self.dt_proj(dt)
+        dt, B, C = jnp.split(jax.vmap(self.x_proj)(x), [self.dt_rank, self.state_dim + 1], axis=-1)
+
+        assert B.shape[-1] == self.state_dim
+        assert C.shape[-1] == self.state_dim
+
+        dt = jax.vmap(self.dt_proj)(dt)
 
         y = mamba_ssm(
             x,
@@ -125,7 +130,7 @@ class MambaBlock(eqx.Module):
             A,
             B,
             C,
-            D=D,
+            D=self.D,
             delta_bias=None,
             delta_softplus=False,
             mode=KernelType.PALLAS if self.use_kernel else KernelType.XLA,
@@ -133,7 +138,7 @@ class MambaBlock(eqx.Module):
 
         y = y * jax.nn.silu(z)
 
-        return self.out_proj(y)
+        return jax.vmap(self.out_proj)(y)
 
 
 class ResidualBlock(eqx.Module):

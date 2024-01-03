@@ -39,6 +39,7 @@ def mamba_ssm(
 
     # don't do jax.lax.associative_scan as this will materialise full state and likely OOM
     _, y = jax.lax.scan(_scan_fn, init=x, xs=[delta_A, delta_B_u, C])
+    # import ipdb; ipdb.set_trace()
 
     y = y + u * D
     return y
