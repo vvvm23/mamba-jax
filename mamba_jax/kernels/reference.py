@@ -66,8 +66,4 @@ if __name__ == "__main__":
     D = jax.random.normal(D_key, (D,))
 
     y = mamba_ssm(u, delta, A, B, C, D)
-
-    import ipdb
-
-    ipdb.set_trace()
     print()
