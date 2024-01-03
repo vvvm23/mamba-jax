@@ -112,9 +112,12 @@ class MambaBlock(eqx.Module):
 
         A = -jnp.exp(jnp.asarray(self.A_log, dtype=jnp.float32))
 
-        x = jax.nn.silu(self.conv1d(x)[..., :L])
+        # TODO: update to just use these arrangement by default
+        x = jnp.transpose(x)
+        x = jax.nn.silu(self.conv1d(x))
+        x = jnp.transpose(x)[:L]
 
-        dt, B, C = jnp.split(jax.vmap(self.x_proj)(x), [self.dt_rank, self.state_dim + 1], axis=-1)
+        dt, B, C = jnp.split(jax.vmap(self.x_proj)(x), [self.dt_rank, self.state_dim + self.dt_rank], axis=-1)
 
         assert B.shape[-1] == self.state_dim
         assert C.shape[-1] == self.state_dim
@@ -171,18 +174,22 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(0)
     model_key, input_key = jax.random.split(key)
 
-    D = 8
-    L = 16
+    D = 32
+    L = 2**20
 
     mixer_cls = partial(MambaBlock)
     norm_cls = partial(nn.RMSNorm, eps=1e-5)
-
     model = ResidualBlock(D, mixer_cls, norm_cls, key=model_key)
 
-    x = jax.random.normal(input_key, (L, D))
+    @jax.jit
+    def test_fn():
+        x = jax.random.normal(input_key, (L, D))
+        y, _ = model(x)
 
-    y, _ = model(x)
+        assert x.shape == y.shape
+        return y
 
-    assert x.shape == y.shape
+    y = test_fn()
     print(y)
+    print(y.shape)
     print()
