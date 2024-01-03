@@ -1,7 +1,15 @@
+from enum import Enum
 from typing import Optional
 
 import jax
 import jax.numpy as jnp
+
+from .reference import mamba_ssm as mamba_ssm_xla
+
+
+class KernelType(Enum):
+    PALLAS = 0
+    XLA = 1
 
 
 # TODO: populate function that arranges data as expected by kernel and calls it
@@ -15,8 +23,12 @@ def mamba_ssm(
     D: Optional[jax.Array] = None,
     delta_bias: Optional[jax.Array] = None,
     delta_softplus: bool = False,
+    mode: KernelType = KernelType.XLA,
 ) -> jax.Array:
-    pass
+    if mode == KernelType.PALLAS:
+        raise NotImplementedError
+    elif mode == KernelType.XLA:
+        return mamba_ssm_xla(u, delta, A, B, C, D=D, delta_bias=delta_bias, delta_softplus=delta_softplus)
 
 
 # TODO: add fused residual+norm layer
