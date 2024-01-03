@@ -139,26 +139,50 @@ class MambaBlock(eqx.Module):
 
 
 class ResidualBlock(eqx.Module):
-    def __init__(self, dim: int, eps: float = 1e-5):
-        self.norm = nn.RMSNorm(dim, eps=eps)
-        self.block = MambaBlock(dim)
+    mixer: MambaBlock
+    norm: eqx.Module
 
-    def forward(self, x: jax.Array) -> jax.Array:
+    def __init__(
+        self,
+        dim: int,
+        mixer_factory,
+        norm_factory=nn.RMSNorm,
+        fused_add_norm: bool = False,
+        key: jax.random.PRNGKey = None,
+    ):
+        super().__init__()
+        self.mixer = mixer_factory(dim, key=key)
+        self.norm = norm_factory(dim)
+
+    def __call__(self, x: jax.Array, res: Optional[jax.Array] = None) -> jax.Array:
         # TODO: add fused residual add +norm followed by mamba mixer
         # correspnds to `Block` in reference
-        pass
+        res = x if res is None else x + res
+
+        x = jax.vmap(self.norm)(res)  # TODO: cast dtype here?
+        x = self.mixer(x)
+
+        return x, res
 
 
 if __name__ == "__main__":
+    from functools import partial
+
     key = jax.random.PRNGKey(0)
     model_key, input_key = jax.random.split(key)
 
     D = 8
     L = 16
-    model = MambaBlock(D, key=model_key)
+
+    mixer_cls = partial(MambaBlock)
+    norm_cls = partial(nn.RMSNorm, eps=1e-5)
+
+    model = ResidualBlock(D, mixer_cls, norm_cls, key=model_key)
 
     x = jax.random.normal(input_key, (L, D))
 
-    y = model(x)
+    y, _ = model(x)
 
+    assert x.shape == y.shape
+    print(y)
     print()
