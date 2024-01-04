@@ -24,12 +24,14 @@ def get_pt_checkpoint(repo_id: str, config_path: str = "config.json", checkpoint
 
 def pt_to_raw_pytree(sd):
     def _key_rename(k: str):
+        # TODO: consider just renaming this in modelling code 🤷
         k = k.replace("backbone", "model")
         return k
 
     return {_key_rename(k): jnp.asarray(v) for k, v in sd.items()}
 
 
+# TODO: add test for this, comparing all weights as a sanity check
 def init_mamba_from_raw_pytree(tree, config):
     # TODO: use other options from config
     N = config["d_model"]
@@ -71,8 +73,4 @@ if __name__ == "__main__":
     sd, config = get_pt_checkpoint("state-spaces/mamba-130m")
     tree = pt_to_raw_pytree(sd)
     model = init_mamba_from_raw_pytree(tree, config)
-
-    import ipdb
-
-    ipdb.set_trace()
-    print()
+    print(model)
