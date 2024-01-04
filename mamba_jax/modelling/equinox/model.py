@@ -206,8 +206,9 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(0)
 
     x = jax.random.randint(key, (L,), minval=0, maxval=vocab_size)
-    model = MambaLLM(N, num_layers, vocab_size, key=key)
+    model = jax.jit(MambaLLM(N, num_layers, vocab_size, key=key))
 
     y = model(x)
+
     print(y)
     print(y.shape)
