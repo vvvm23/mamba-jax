@@ -153,6 +153,7 @@ class ResidualBlock(eqx.Module):
     norm: eqx.Module
 
     res_dtype: jnp.dtype = jnp.float32
+    layer_idx: Optional[int] = None
 
     def __init__(
         self,
@@ -160,10 +161,12 @@ class ResidualBlock(eqx.Module):
         mixer_factory,
         norm_factory=nn.RMSNorm,
         fused_add_norm: bool = False,
-        key: jax.random.PRNGKey = None,
         res_dtype: jnp.dtype = jnp.float32,
+        layer_idx: Optional[int] = None,
+        key: jax.random.PRNGKey = None,
     ):
         super().__init__()
+        self.layer_idx = layer_idx
         self.res_dtype = res_dtype
         self.mixer = mixer_factory(dim, key=key)
         self.norm = norm_factory(dim)
