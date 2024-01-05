@@ -66,9 +66,6 @@ def init_mamba_from_raw_pytree(tree, config):
 
         return replace
 
-    import ipdb
-
-    ipdb.set_trace()
     replace = generate_replace(tree)
     model = eqx.tree_at(where_fn, model, replace=replace)
 
@@ -76,19 +73,34 @@ def init_mamba_from_raw_pytree(tree, config):
 
 
 if __name__ == "__main__":
+    import tqdm
     from transformers import AutoTokenizer
 
-    sd, config = get_pt_checkpoint("state-spaces/mamba-130m")
+    sd, config = get_pt_checkpoint("state-spaces/mamba-2.8b")
     tree = pt_to_raw_pytree(sd)
     model = init_mamba_from_raw_pytree(tree, config)
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
+
     prompt = "Aloha, World! "
+
+    gen_len = 20
+    temperature = 0.7
+    key = jax.random.PRNGKey(0)
+
+    output = []
     input_ids = tokenizer(prompt, return_tensors="np").input_ids[0]
 
-    import ipdb
+    i = input_ids.shape[0]
+    input_ids = jnp.concatenate([input_ids, jnp.zeros(gen_len, dtype=jnp.int32)], axis=0)
 
-    ipdb.set_trace()
-    logits = model(input_ids)
-    output_ids = jnp.argmax(logits, axis=-1)
-    print(tokenizer.decode(output_ids))
+    model = eqx.filter_jit(model)
+    for _ in tqdm.trange(gen_len):
+        logits = model(input_ids)
+        logits = logits / temperature
+        key, subkey = jax.random.split(key)
+        output_ids = jax.random.categorical(subkey, logits)
+        input_ids = input_ids.at[i].set(output_ids[i - 1])
+        i += 1
+
+    print(tokenizer.decode(input_ids))
