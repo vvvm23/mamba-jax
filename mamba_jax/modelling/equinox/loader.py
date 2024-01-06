@@ -76,31 +76,40 @@ if __name__ == "__main__":
     import tqdm
     from transformers import AutoTokenizer
 
-    sd, config = get_pt_checkpoint("state-spaces/mamba-2.8b")
+    sd, config = get_pt_checkpoint("state-spaces/mamba-1.4b")
     tree = pt_to_raw_pytree(sd)
-    model = init_mamba_from_raw_pytree(tree, config)
+    model: MambaLLM = init_mamba_from_raw_pytree(tree, config)
 
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
-    prompt = "Aloha, World! "
+    prompt = "How to make a time machine - A Thesis:"
 
-    gen_len = 20
-    temperature = 0.7
-    key = jax.random.PRNGKey(0)
+    gen_len = 2**20
+    temperature = 0.9
 
     output = []
+
+    cache = model.init_cache()
+    generate_step = eqx.filter_jit(model.generate_step)
+
     input_ids = tokenizer(prompt, return_tensors="np").input_ids[0]
-
     i = input_ids.shape[0]
-    input_ids = jnp.concatenate([input_ids, jnp.zeros(gen_len, dtype=jnp.int32)], axis=0)
+    # input_ids = jnp.concatenate([input_ids, jnp.zeros(gen_len, dtype=jnp.int32)], axis=0)
+    print(tokenizer.decode(input_ids, skip_special_tokens=True), flush=True, end="")
+    key = jax.random.PRNGKey(0xFF)
 
-    model = eqx.filter_jit(model)
-    for _ in tqdm.trange(gen_len):
-        logits = model(input_ids)
+    # prefill
+    for input_id in input_ids[:-1]:
+        _, cache = generate_step(input_id, cache=cache)
+
+    input_id = input_ids[-1]
+    output = input_ids.tolist()
+
+    for _ in range(gen_len):
+        logits, cache = generate_step(input_id, cache=cache)
         logits = logits / temperature
+        logits = logits.at[tokenizer.eos_token_id].set(-10000)
         key, subkey = jax.random.split(key)
-        output_ids = jax.random.categorical(subkey, logits)
-        input_ids = input_ids.at[i].set(output_ids[i - 1])
-        i += 1
-
-    print(tokenizer.decode(input_ids))
+        input_id = jax.random.categorical(subkey, logits)
+        output.append(input_id)
+        print(tokenizer.decode([output[-1]]), flush=True, end="")

@@ -1,5 +1,5 @@
 from functools import partial
-from typing import List, Literal
+from typing import Dict, List, Literal, Optional
 
 import equinox as eqx
 import equinox.nn as nn
@@ -65,6 +65,12 @@ class MambaModel(eqx.Module):
 
     norm_f: nn.RMSNorm
 
+    dim: int
+    num_layers: int
+    state_dim: int = 16
+    kernel_size: int = 4
+    expand: int = 2
+
     def __init__(
         self,
         dim: int,
@@ -89,6 +95,12 @@ class MambaModel(eqx.Module):
         key: jax.random.PRNGKey = None,
     ):
         super().__init__()
+        self.dim = dim
+        self.state_dim = state_dim
+        self.kernel_size = kernel_size
+        self.expand = expand
+        self.num_layers = num_layers
+
         # TODO: auto-pad vocab to mult of 8
 
         key, subkey = jax.random.split(key)
@@ -134,6 +146,28 @@ class MambaModel(eqx.Module):
 
         return x
 
+    def generate_step(self, input_ids: jax.Array, cache=None) -> jax.Array:
+        x = self.embedding(input_ids)
+
+        res = None
+        for layer in self.layers:
+            x, res = layer.generate_step(x, res, cache=cache)
+
+        res = x + res if res is not None else x
+        x = self.norm_f(res.astype(self.norm_f.weight.dtype))
+
+        return x, cache
+
+    def init_cache(self):
+        cache = []
+        for _ in range(self.num_layers):
+            conv_state = jnp.zeros((self.dim * self.expand, self.kernel_size))
+            ssm_state = jnp.zeros((self.dim * self.expand, self.state_dim))
+
+            cache.append((conv_state, ssm_state))
+
+        return cache
+
 
 # corresponds to implementation in:
 # https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py
@@ -166,7 +200,6 @@ class MambaLLM(eqx.Module):
         key: jax.random.PRNGKey = None,
     ):
         super().__init__()
-
         model_key, head_key = jax.random.split(key)
 
         self.model = MambaModel(
@@ -197,6 +230,16 @@ class MambaLLM(eqx.Module):
     def __call__(self, input_ids: jax.Array) -> jax.Array:
         x = self.model(input_ids)
         return jax.vmap(self.lm_head)(x)
+
+    def init_cache(self):
+        return self.model.init_cache()
+
+    def generate_step(self, input_ids: jax.Array, cache) -> jax.Array:
+        x, cache = self.model.generate_step(input_ids, cache)
+        return self.lm_head(x), cache
+
+    # TODO: add generate call that implements a loop that returns one token at a
+    # time, and caches state for next step
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import equinox as eqx
 import equinox.nn as nn
 import jax
 import jax.numpy as jnp
-from einops import repeat
+from einops import einsum, rearrange, repeat
 
 from ...kernels.interface import KernelType, mamba_ssm
 
@@ -147,6 +147,47 @@ class MambaBlock(eqx.Module):
         y = y.astype(dtype=self.dtype)
         return jax.vmap(self.out_proj)(y)
 
+    # in this instance, x is a 1d tensor
+    def generate_step(self, x: jax.Array, cache) -> jax.Array:
+        conv_state, ssm_state = cache[self.layer_idx]
+
+        # import ipdb; ipdb.set_trace()
+        x = x.astype(dtype=self.dtype)
+        x, z = jnp.split(self.in_proj(x), 2, axis=-1)
+
+        A = -jnp.exp(self.A_log.astype(dtype=jnp.float32))
+
+        conv_state = jnp.roll(conv_state, shift=-1, axis=-1)
+        conv_state = conv_state.at[:, -1].set(x)
+
+        x = jnp.sum(conv_state * rearrange(self.conv1d.weight, "d 1 w -> d w"), axis=-1)
+
+        if self.conv1d.bias is not None:
+            x = x + self.conv1d.bias[:, 0]
+
+        x = jax.nn.silu(x).astype(dtype=self.dtype)
+        dt, B, C = jnp.split(self.x_proj(x), [self.dt_rank, self.state_dim + self.dt_rank], axis=-1)
+
+        assert B.shape[-1] == self.state_dim
+        assert C.shape[-1] == self.state_dim
+
+        dt = jax.nn.softplus(self.dt_proj(dt))
+        x = x.astype(dtype=self.dtype)
+
+        delta_A = jnp.exp(einsum(dt, A, "d, d n -> d n"))
+        delta_B = einsum(dt, B, "d, n -> d n")
+
+        ssm_state = ssm_state * delta_A + rearrange(x, "d -> d 1") * delta_B
+
+        y = einsum(ssm_state, C, "d n, n -> d")
+        y = y + x * self.D
+
+        y = y * jax.nn.silu(z)
+        y = y.astype(dtype=self.dtype)
+
+        cache[self.layer_idx] = (conv_state, ssm_state)
+        return self.out_proj(y)
+
 
 class ResidualBlock(eqx.Module):
     mixer: MambaBlock
@@ -178,6 +219,14 @@ class ResidualBlock(eqx.Module):
 
         x = jax.vmap(self.norm)(res.astype(dtype=self.norm.weight.dtype))
         x = self.mixer(x)
+
+        return x, res.astype(dtype=self.res_dtype)
+
+    def generate_step(self, x: jax.Array, res: Optional[jax.Array] = None, cache=None) -> jax.Array:
+        res = x if res is None else x + res
+        x = self.norm(res.astype(dtype=self.norm.weight.dtype))
+
+        x = self.mixer.generate_step(x, cache)
 
         return x, res.astype(dtype=self.res_dtype)
 
