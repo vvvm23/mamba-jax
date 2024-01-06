@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import torch  # TODO: can remove dependency once mamba converted to safetensors
 from huggingface_hub import hf_hub_download
+from transformers import AutoTokenizer
 
 from .model import MambaLLM
 
@@ -17,7 +18,7 @@ def get_pt_checkpoint(repo_id: str, config_path: str = "config.json", checkpoint
     with open(config_path, mode="r") as f:
         config = json.load(f)
 
-    sd = torch.load(checkpoint_path, weights_only=True)
+    sd = torch.load(checkpoint_path, weights_only=True, map_location="cpu")
 
     return sd, config
 
@@ -74,50 +75,10 @@ def init_mamba_from_raw_pytree(tree, config):
     return model
 
 
-if __name__ == "__main__":
-    import tqdm
-    from transformers import AutoTokenizer
-
-    sd, config = get_pt_checkpoint("state-spaces/mamba-2.8b")
-    # config['dtype'] = jnp.bfloat16
-    config["dtype"] = jnp.bfloat16
-
+def load_pretrained(model, dtype: jnp.dtype = jnp.float32):
+    sd, config = get_pt_checkpoint(model)
+    config["dtype"] = dtype
     tree = pt_to_raw_pytree(sd, dtype=config["dtype"])
-    model: MambaLLM = init_mamba_from_raw_pytree(tree, config)
-
+    model = init_mamba_from_raw_pytree(tree, config)
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
-
-    prompt = "Instructions for building a time machine, by Albert Einstein:\n\n"
-
-    gen_len = 1024
-    temperature = 1.0
-
-    generate_step = eqx.filter_jit(model.generate_step)
-
-    for p in range(0, 100):
-        output = []
-        cache = model.init_cache()
-
-        input_ids = tokenizer(prompt, return_tensors="np").input_ids[0]
-
-        print(tokenizer.decode(input_ids, skip_special_tokens=True), flush=True, end="")
-        key = jax.random.PRNGKey(p * p + 2 * p + 0xFF)
-
-        # prefill
-        for input_id in input_ids[:-1]:
-            _, cache = generate_step(input_id, cache=cache)
-
-        input_id = input_ids[-1]
-        output = input_ids.tolist()
-
-        for _ in range(gen_len):
-            logits, cache = generate_step(input_id, cache=cache)
-            logits = logits / temperature
-            # logits = logits.at[tokenizer.eos_token_id].set(-10000)
-            key, subkey = jax.random.split(key)
-            input_id = jax.random.categorical(subkey, logits)
-            if input_id == tokenizer.eos_token_id:
-                print("\n")
-                break
-            output.append(input_id)
-            print(tokenizer.decode([output[-1]]), flush=True, end="")
+    return model, tokenizer

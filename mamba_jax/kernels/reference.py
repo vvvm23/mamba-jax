@@ -51,22 +51,3 @@ def mamba_ssm(
 # this could be better served as a regular layer
 def add_norm():
     pass
-
-
-if __name__ == "__main__":
-    key = jax.random.PRNGKey(0)
-
-    L = 128
-    D = 16
-    N = 8
-    u_key, delta_key, A_key, B_key, C_key, D_key = jax.random.split(key, 6)
-
-    u = jax.random.normal(u_key, (L, D))
-    delta = jax.random.normal(delta_key, (L, D))
-    A = jax.random.normal(A_key, (D, N))
-    B = jax.random.normal(B_key, (L, N))
-    C = jax.random.normal(C_key, (L, N))
-    D = jax.random.normal(D_key, (D,))
-
-    y = mamba_ssm(u, delta, A, B, C, D)
-    print()

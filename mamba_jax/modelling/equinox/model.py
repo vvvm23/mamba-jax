@@ -248,22 +248,5 @@ class MambaLLM(eqx.Module):
         x, cache = self.model.generate_step(input_ids, cache)
         return self.lm_head(x), cache
 
-    # def to_bf16(self):
-    #     return jax.tree_util.tree_map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, self)
-
     # TODO: add generate call that implements a loop that returns one token at a
     # time, and caches state for next step
-
-
-if __name__ == "__main__":
-    L, N = 16384, 128
-    num_layers = 12
-    vocab_size = 10_000
-    key = jax.random.PRNGKey(0)
-
-    x = jax.random.randint(key, (L,), minval=0, maxval=vocab_size)
-    model = MambaLLM(N, num_layers, vocab_size, key=key)
-
-    y = model(x)
-    print(y)
-    print(y.shape)
