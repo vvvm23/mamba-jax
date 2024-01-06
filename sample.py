@@ -50,13 +50,15 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt", type=str, default="bar")
-    parser.add_argument("--model", type=str, default="state-spaces/mamba-2.8b")
-    parser.add_argument("--bf16", action="store_true")
-    parser.add_argument("--gen-len", type=int, default=1024)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--seed_iters", type=int, default=1)
+    parser.add_argument("--prompt", type=str, default="Aloha, World! ", help="Starting prompt for generation.")
+    parser.add_argument(
+        "--model", type=str, default="state-spaces/mamba-2.8b", help="Model repo id as on Huggingface Hub."
+    )
+    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 for inference")
+    parser.add_argument("--gen_len", type=int, default=1024, help="Length of generated sequence.")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed for PRNG initialisation.")
+    parser.add_argument("--seed_iters", type=int, default=1, help="Number of seeds to generate, starting from --seed.")
     args = parser.parse_args()
 
     main(args)
