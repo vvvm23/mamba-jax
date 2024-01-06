@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from einops import einsum, rearrange, repeat
 
 from ...kernels.interface import KernelType, mamba_ssm
+from .utils import cast_eqx_layer
 
 
 # corresponds to implementation in:
@@ -58,21 +59,26 @@ class MambaBlock(eqx.Module):
         self.state_dim = state_dim
 
         key, subkey = jax.random.split(key)
-        self.in_proj = nn.Linear(dim, 2 * inner_dim, use_bias=bias, key=subkey)
+        self.in_proj = cast_eqx_layer(nn.Linear(dim, 2 * inner_dim, use_bias=bias, key=subkey), dtype=self.dtype)
 
         key, subkey = jax.random.split(key)
-        self.conv1d = nn.Conv1d(
-            in_channels=inner_dim,
-            out_channels=inner_dim,
-            use_bias=conv_bias,
-            kernel_size=kernel_size,
-            groups=inner_dim,
-            padding=kernel_size - 1,
-            key=subkey,
+        self.conv1d = cast_eqx_layer(
+            nn.Conv1d(
+                in_channels=inner_dim,
+                out_channels=inner_dim,
+                use_bias=conv_bias,
+                kernel_size=kernel_size,
+                groups=inner_dim,
+                padding=kernel_size - 1,
+                key=subkey,
+            ),
+            dtype=self.dtype,
         )
 
         key, subkey = jax.random.split(key)
-        self.x_proj = nn.Linear(inner_dim, self.dt_rank + state_dim * 2, use_bias=False, key=subkey)
+        self.x_proj = cast_eqx_layer(
+            nn.Linear(inner_dim, self.dt_rank + state_dim * 2, use_bias=False, key=subkey), dtype=self.dtype
+        )
 
         key, subkey = jax.random.split(key)
         self.dt_proj = nn.Linear(self.dt_rank, inner_dim, use_bias=True, key=subkey)
@@ -97,6 +103,7 @@ class MambaBlock(eqx.Module):
             raise NotImplementedError
 
         self.dt_proj = eqx.tree_at(lambda l: l.weight, self.dt_proj, new_weight)
+        self.dt_proj = cast_eqx_layer(self.dt_proj, dtype=self.dtype)
 
         # S4D (diagonal) real initialisation
         A = repeat(jnp.arange(1, state_dim + 1), "n -> d n", d=inner_dim)
@@ -106,7 +113,7 @@ class MambaBlock(eqx.Module):
         self.D = jnp.ones((inner_dim,))
 
         key, subkey = jax.random.split(key)
-        self.out_proj = nn.Linear(inner_dim, dim, use_bias=bias, key=subkey)
+        self.out_proj = cast_eqx_layer(nn.Linear(inner_dim, dim, use_bias=bias, key=subkey), dtype=self.dtype)
 
     def __call__(self, x: jax.Array) -> jax.Array:
         L, _ = x.shape
@@ -178,6 +185,7 @@ class MambaBlock(eqx.Module):
         delta_B = einsum(dt, B, "d, n -> d n")
 
         ssm_state = ssm_state * delta_A + rearrange(x, "d -> d 1") * delta_B
+        ssm_state = ssm_state.astype(dtype=self.dtype)
 
         y = einsum(ssm_state, C, "d n, n -> d")
         y = y + x * self.D
@@ -195,6 +203,7 @@ class ResidualBlock(eqx.Module):
 
     res_dtype: jnp.dtype = jnp.float32
     layer_idx: Optional[int] = None
+    dtype: jnp.dtype = jnp.float32
 
     def __init__(
         self,
@@ -204,13 +213,15 @@ class ResidualBlock(eqx.Module):
         fused_add_norm: bool = False,
         res_dtype: jnp.dtype = jnp.float32,
         layer_idx: Optional[int] = None,
+        dtype: jnp.dtype = jnp.float32,
         key: jax.random.PRNGKey = None,
     ):
         super().__init__()
         self.layer_idx = layer_idx
         self.res_dtype = res_dtype
-        self.mixer = mixer_factory(dim, key=key)
-        self.norm = norm_factory(dim)
+        self.dtype = dtype
+        self.mixer = mixer_factory(dim, dtype=dtype, key=key)
+        self.norm = cast_eqx_layer(norm_factory(dim), dtype=dtype)
 
     def __call__(self, x: jax.Array, res: Optional[jax.Array] = None) -> jax.Array:
         # TODO: add fused residual add +norm followed by mamba mixer
@@ -218,6 +229,7 @@ class ResidualBlock(eqx.Module):
         res = x if res is None else x + res
 
         x = jax.vmap(self.norm)(res.astype(dtype=self.norm.weight.dtype))
+        x = x.astype(self.dtype)
         x = self.mixer(x)
 
         return x, res.astype(dtype=self.res_dtype)
@@ -226,6 +238,7 @@ class ResidualBlock(eqx.Module):
         res = x if res is None else x + res
         x = self.norm(res.astype(dtype=self.norm.weight.dtype))
 
+        x = x.astype(self.dtype)
         x = self.mixer.generate_step(x, cache)
 
         return x, res.astype(dtype=self.res_dtype)
