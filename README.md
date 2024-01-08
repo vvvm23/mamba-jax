@@ -11,8 +11,8 @@ As the plan is to eventually write custom Pallas kernels for the Mamba
 recurrence scan, we need to install requirements that work with Pallas.
 
 Unfortunately, Pallas is currently quite hard to install (see [this
-issue](https://github.com/google/jax/issues/18603)) and can't be fully specified
-in a `requirements.txt` file due to requiring certain flags. So, to setup the
+issue](https://github.com/google/jax/issues/18603)) and the required options
+can't be fully specified in a `requirements.txt` file. So, to setup the
 environment for this repository, take the following steps:
 1. Create a Python 3.9 or 3.10 virtual environment.
 2. Run `install-requirements.txt` and ensure none of the commands fail.
@@ -20,8 +20,8 @@ environment for this repository, take the following steps:
 ## Usage
 
 ### Sampling
-The script `sample.py` is the main entry point to sample from a pretrained Mamba
-model:
+The script `sample.py` is the main entry point to sample from a pretrained
+Mamba model:
 ```
 usage: sample.py [-h] [--prompt PROMPT] [--model MODEL] [--bf16]
                  [--gen-len GEN_LEN] [--temperature TEMPERATURE] [--seed SEED]
@@ -45,14 +45,14 @@ options:
 The components of the full Mamba architecture can be imported as follows:
 - An interface with the S6 (S4 with selective scan) model can be imported at the
 path `mamba_jax.kernels.mamba_ssm`. This is a purely functional implementation
-of the Algorithm 2 in the paper which is agnostic of the neural network API you
+of Algorithm 2 in the paper which is agnostic of the neural network API you
 use.  Currently, this just dispatches to a pure JAX implementation, though the
 idea is you will be able to dispatch to an optimised Pallas kernel via the
-`mode` argument.
+`mode` argument in the future.
 - [Equinox](https://github.com/patrick-kidger/equinox) Mamba language model and
 sub-components of it can be found in `mamba_jax.modelling.equinox` as
 `MambaBlock`, `ResidualBlock`, `MambaModel`, and `MambaLLM`.
-- Other neural network APIs coming soon.
+- PRs for other neural network APIs (Flax, NNX) welcome.
 
 ## Roadmap
 - [ ] Make this all pip installable.
