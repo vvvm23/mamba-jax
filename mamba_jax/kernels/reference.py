@@ -14,6 +14,7 @@ def mamba_ssm(
     D: Optional[jax.Array] = None,  # time-invariant
     delta_bias: Optional[jax.Array] = None,
     delta_softplus: bool = False,
+    associative_scan: bool = True,
 ) -> jax.Array:
     # Adapted from Mamba Minimal by johnma2006
     # https://github.com/johnma2006/mamba-minimal/blob/c91c81d99480cf89fe39d3b04a2115ce984612e2/model.py#L275
@@ -40,8 +41,14 @@ def mamba_ssm(
         x = d_A * x + d_Bu
         return x, einsum(x, C, "d_in n, n -> d_in")
 
-    # don't do jax.lax.associative_scan as this will materialise full state and likely OOM
-    _, y = jax.lax.scan(_scan_fn, init=x, xs=[delta_A, delta_B_u, C])
+    def _associative_scan_fn(s, c):
+        return tuple((c[0] * s[0], c[0] * s[1] + c[1]))
+
+    if associative_scan:
+        _, y = jax.lax.associative_scan(_associative_scan_fn, (delta_A, delta_B_u))
+        y = einsum(y, C, "L d_in n, L n -> L d_in")
+    else:
+        _, y = jax.lax.scan(_scan_fn, init=x, xs=[delta_A, delta_B_u, C])
 
     y = y + u * D
     return y
@@ -51,3 +58,40 @@ def mamba_ssm(
 # this could be better served as a regular layer
 def add_norm():
     pass
+
+
+if __name__ == "__main__":
+    import time
+    from functools import partial
+
+    key = jax.random.PRNGKey(0)
+
+    L, D, N = 8192 * 2, 16, 4
+
+    u = jax.random.normal(key, (L, D))
+    delta = jax.random.normal(key, (L, D))
+    A = jax.random.normal(key, (D, N))
+    B = jax.random.normal(key, (L, N))
+    C = jax.random.normal(key, (L, N))
+    D = 0
+
+    delta_softplus = True
+
+    scan_fn = jax.jit(partial(mamba_ssm, delta_softplus=delta_softplus, associative_scan=False))
+    associative_scan_fn = jax.jit(partial(mamba_ssm, delta_softplus=delta_softplus, associative_scan=True))
+
+    scan_result = scan_fn(u, delta, A, B, C, D)
+    associative_scan_result = associative_scan_fn(u, delta, A, B, C, D)
+
+    start_time = time.time()
+    for _ in range(100):
+        _ = scan_fn(u, delta, A, B, C, D).block_until_ready()
+    scan_time = (time.time() - start_time) / 100
+
+    start_time = time.time()
+    for _ in range(100):
+        _ = associative_scan_fn(u, delta, A, B, C, D).block_until_ready()
+    associative_scan_time = (time.time() - start_time) / 100
+
+    print(scan_time, associative_scan_time)
+    assert scan_result.shape == associative_scan_result.shape

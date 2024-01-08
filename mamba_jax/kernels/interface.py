@@ -10,6 +10,7 @@ from .reference import mamba_ssm as mamba_ssm_xla
 class KernelType(Enum):
     PALLAS = 0
     XLA = 1
+    XLA_ASSOCIATIVE = 2
 
 
 # TODO: populate function that arranges data as expected by kernel and calls it
@@ -29,7 +30,14 @@ def mamba_ssm(
         raise NotImplementedError
     elif mode == KernelType.XLA:
         # let JAX handle backwards pass in reference kernel
-        return mamba_ssm_xla(u, delta, A, B, C, D=D, delta_bias=delta_bias, delta_softplus=delta_softplus)
+        return mamba_ssm_xla(
+            u, delta, A, B, C, D=D, delta_bias=delta_bias, delta_softplus=delta_softplus, associative_scan=False
+        )
+    elif mode == KernelType.XLA_ASSOCIATIVE:
+        # reference kernel with associative scan
+        return mamba_ssm_xla(
+            u, delta, A, B, C, D=D, delta_bias=delta_bias, delta_softplus=delta_softplus, associative_scan=True
+        )
 
 
 # TODO: add fused residual+norm layer
