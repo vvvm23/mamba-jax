@@ -1,6 +1,7 @@
 import equinox as eqx
 
 
+# Equinox layers don't have a dtype parameter, so we need to manually cast them
 def cast_eqx_layer(layer, dtype):
     weight, bias = None, None
     if hasattr(layer, "weight") and layer.weight is not None:

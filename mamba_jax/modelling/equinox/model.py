@@ -1,69 +1,18 @@
-from functools import partial
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal
 
 import equinox as eqx
 import equinox.nn as nn
 import jax
 import jax.numpy as jnp
 
-from .blocks import MambaBlock, ResidualBlock
+from .blocks import ResidualBlock, create_block
 from .utils import cast_eqx_layer
 
-
-def create_block(
-    dim: int,
-    state_dim: int = 16,
-    kernel_size: int = 4,
-    expand: int = 2,
-    dt_rank: Literal["auto"] | int = "auto",
-    dt_min: float = 0.001,
-    dt_max: float = 0.1,
-    dt_init: Literal["constant", "random"] = "random",
-    dt_scale: float = 1.0,
-    dt_init_floor: float = 1e-4,
-    conv_bias: bool = True,
-    bias: bool = False,
-    use_kernel: bool = False,
-    layer_idx: int = None,
-    norm_eps: float = 1e-5,
-    # TODO: add norm type
-    res_dtype: jnp.dtype = jnp.float32,
-    dtype: jnp.dtype = jnp.float32,
-    key: jax.random.PRNGKey = None,
-) -> ResidualBlock:
-
-    mixer_factory = partial(
-        MambaBlock,
-        state_dim=state_dim,
-        kernel_size=kernel_size,
-        expand=expand,
-        dt_rank=dt_rank,
-        dt_min=dt_min,
-        dt_max=dt_max,
-        dt_init=dt_init,
-        dt_scale=dt_scale,
-        dt_init_floor=dt_init_floor,
-        conv_bias=conv_bias,
-        bias=bias,
-        use_kernel=use_kernel,
-        layer_idx=layer_idx,
-    )
-
-    norm_factory = partial(nn.RMSNorm, eps=norm_eps)
-
-    return ResidualBlock(
-        dim,
-        mixer_factory=mixer_factory,
-        norm_factory=norm_factory,
-        res_dtype=res_dtype,
-        layer_idx=layer_idx,
-        dtype=dtype,
-        key=key,
-    )
-
+# corresponds to implementation in:
+# https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py
 
 # Model with Mamba sequence mixer, with no specific task head
-# corresponds to the `MixerModel`
+# corresponds to the `MixerModel` in original implementation
 class MambaModel(eqx.Module):
 
     embedding: nn.Embedding
@@ -96,6 +45,7 @@ class MambaModel(eqx.Module):
         conv_bias: bool = True,
         bias: bool = False,
         use_kernel: bool = False,
+        pad_vocab_mult: int = 0,
         norm_eps: float = 1e-5,
         # TODO: add norm type (rms or layer)
         res_dtype: jnp.dtype = jnp.float32,
@@ -110,7 +60,8 @@ class MambaModel(eqx.Module):
         self.num_layers = num_layers
         self.dtype = dtype
 
-        # TODO: auto-pad vocab to mult of 8
+        if pad_vocab_mult != 0 and vocab_size % pad_vocab_mult != 0:
+            vocab_size += pad_vocab_mult - (vocab_size % pad_vocab_mult)
 
         key, subkey = jax.random.split(key)
         self.embedding = cast_eqx_layer(nn.Embedding(vocab_size, dim, key=subkey), dtype=dtype)
@@ -179,9 +130,7 @@ class MambaModel(eqx.Module):
         return cache
 
 
-# corresponds to implementation in:
-# https://github.com/state-spaces/mamba/blob/main/mamba_ssm/models/mixer_seq_simple.py
-# essentially, the `MambaLMHeadModel` class
+# corresponds to `MambaLMHeadModel` class in original implementation
 class MambaLLM(eqx.Module):
     model: MambaModel
     lm_head: nn.Linear
@@ -203,6 +152,7 @@ class MambaLLM(eqx.Module):
         conv_bias: bool = True,
         bias: bool = False,
         use_kernel: bool = False,
+        pad_vocab_mult: int = 0,
         norm_eps: float = 1e-5,
         # TODO: add norm type (rms or layer)
         res_dtype: jnp.dtype = jnp.float32,
@@ -228,6 +178,7 @@ class MambaLLM(eqx.Module):
             conv_bias=conv_bias,
             bias=bias,
             use_kernel=use_kernel,
+            pad_vocab_mult=pad_vocab_mult,
             norm_eps=norm_eps,
             # TODO: add norm type (rms or layer)
             res_dtype=res_dtype,
@@ -241,12 +192,39 @@ class MambaLLM(eqx.Module):
         x = self.model(input_ids)
         return jax.vmap(self.lm_head)(x)
 
+    # init cache for efficient sampling
     def init_cache(self):
         return self.model.init_cache()
 
+    # performs a single generate step
     def generate_step(self, input_ids: jax.Array, cache) -> jax.Array:
         x, cache = self.model.generate_step(input_ids, cache)
         return self.lm_head(x), cache
 
-    # TODO: add generate call that implements a loop that returns one token at a
-    # time, and caches state for next step
+    # this generate call will sample from the model without interacting with the host.
+    # it won't stop when eos_token_id is generated, so it needs to be
+    # post-processed to remove trailing tokens.
+    def generate(
+        self, input_ids: jax.Array, gen_len: int, temperature: float = 1.0, key: jax.random.PRNGKey = None
+    ) -> jax.Array:
+        cache = self.init_cache()
+
+        def prefill_scan(cache, x):
+            _, cache = self.generate_step(x, cache=cache)
+            return cache, None
+
+        cache, _ = jax.lax.scan(prefill_scan, init=cache, xs=input_ids[:-1])
+
+        def generate_scan(carry, _):
+            cache, input_id, key = carry
+
+            key, subkey = jax.random.split(key)
+            logits, cache = self.generate_step(input_id, cache=cache)
+            logits = logits / temperature
+            output_id = jax.random.categorical(subkey, logits)
+
+            return (cache, output_id, key), output_id
+
+        _, output_ids = jax.lax.scan(generate_scan, init=(cache, input_ids[-1], key), xs=jnp.arange(gen_len)[:, None])
+
+        return jnp.concatenate([input_ids, output_ids])

@@ -34,13 +34,20 @@ def pt_to_raw_pytree(sd, dtype: Optional[jnp.dtype] = jnp.float32):
     return {_key_rename(k): jnp.asarray(v, dtype=dtype) for k, v in sd.items()}
 
 
-# TODO: add test for this, comparing all weights as a sanity check
 def init_mamba_from_raw_pytree(tree, config):
-    # TODO: use other options from config
+    # TODO: add fused add norm and norm type options
     N = config["d_model"]
     num_layers = config["n_layer"]
     vocab_size = config["vocab_size"]
-    model = MambaLLM(N, num_layers, vocab_size, key=jax.random.PRNGKey(0), dtype=config["dtype"])
+    model = MambaLLM(
+        N,
+        num_layers,
+        vocab_size,
+        res_dtype=jnp.float32 if config["residual_in_fp32"] else jnp.bfloat16,
+        pad_vocab_mult=config["pad_vocab_size_multiple"],
+        key=jax.random.PRNGKey(0),
+        dtype=config["dtype"],
+    )
 
     def where_fn(model):
         where = []
@@ -61,7 +68,6 @@ def init_mamba_from_raw_pytree(tree, config):
     def generate_replace(tree):
         replace = []
         for k, v in tree.items():
-            # paranoid about ordering..
             if "conv1d.bias" in k:
                 replace.append(jnp.expand_dims(v, axis=-1))
                 continue

@@ -1,6 +1,6 @@
 ## Pallas Kernel for Mamba Selective SSM
 
-This directory contains the implementation for the Mamba Selective SSM
+This directory will contain the implementation for the Mamba Selective SSM
 operation written in Pallas, an extension of JAX that allows for custom kernels
 that compile to both GPU and TPU.
 
@@ -18,4 +18,4 @@ The kernel will perform the following operations:
 For efficient training, we also define custom kernels for the backwards pass
 using `jax.custom_jvp`.
 
-*We also include kernels for a fused residual+norm layer
+*We also include kernels for a fused residual+norm layer*
