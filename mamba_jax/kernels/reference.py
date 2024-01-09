@@ -66,13 +66,13 @@ if __name__ == "__main__":
 
     key = jax.random.PRNGKey(0)
 
-    L, D, N = 8192 * 2, 16, 4
+    L, D, N = 2048, 1024, 16
 
-    u = jax.random.normal(key, (L, D))
-    delta = jax.random.normal(key, (L, D))
-    A = jax.random.normal(key, (D, N))
-    B = jax.random.normal(key, (L, N))
-    C = jax.random.normal(key, (L, N))
+    u = jax.random.normal(key, (L, D), dtype=jnp.bfloat16) / 10
+    delta = jax.random.normal(key, (L, D), dtype=jnp.bfloat16) / 10
+    A = jax.random.normal(key, (D, N), dtype=jnp.bfloat16) / 10
+    B = jax.random.normal(key, (L, N), dtype=jnp.bfloat16) / 10
+    C = jax.random.normal(key, (L, N), dtype=jnp.bfloat16) / 10
     D = 0
 
     delta_softplus = True

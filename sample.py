@@ -10,7 +10,6 @@ from mamba_jax.modelling.equinox.loader import load_pretrained
 def main(args):
     model, tokenizer = load_pretrained(args.model, dtype=jnp.bfloat16 if args.bf16 else jnp.float32)
 
-    # prompt = "Instructions for building a time machine, by Albert Einstein:\n\n"
     prompt = args.prompt
 
     gen_len = args.gen_len

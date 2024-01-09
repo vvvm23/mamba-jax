@@ -3,7 +3,7 @@ Unofficial Implementation of "Mamba: Linear-Time Sequence Modeling with
 Selective State Spaces" in JAX.
 
 > This is very much a work-in-progress implementation. Expect numerical
-> mismatches, slower speeds, and bad code herein.
+> mismatches, slower speeds, bad code, and general wrongness herein.
 
 ## Installation
 
@@ -16,6 +16,9 @@ can't be fully specified in a `requirements.txt` file. So, to setup the
 environment for this repository, take the following steps:
 1. Create a Python 3.9 or 3.10 virtual environment.
 2. Run `install-requirements.txt` and ensure none of the commands fail.
+
+Such a kernel does not exist yet, and it is not clear how it would be
+implemented. However, I optimistically pin the versions for now.
 
 ## Usage
 
@@ -71,7 +74,10 @@ This implementation was based off a mix of:
 
 A lot of understanding of how S4 models work was derived from:
 - [Albert Gu's amazing thesis on the topic](https://stacks.stanford.edu/file/druid:mb976vf9362/gu_dissertation-augmented.pdf)
-- [The Annotated S4](https://srush.github.io/annotated-s4/)
+- [The Annotated S4 by Sasha Rush](https://srush.github.io/annotated-s4/)
+
+And a lot of understanding on the associative scan recurrent form was derived from:
+- [Appendix H of the S5 paper](https://arxiv.org/abs/2208.04933)
 
 ### References
 

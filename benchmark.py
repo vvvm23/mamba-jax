@@ -28,7 +28,7 @@ def scan_vs_associative_graph():
     associative_scan_fn = partial(mamba_ssm, delta_softplus=delta_softplus, associative_scan=True)
 
     key = jax.random.PRNGKey(0)
-    D = 1024
+    D = 2048
     iters = 5
 
     Ls = [2**4, 2**6, 2**8, 2**10, 2**12, 2**14, 2**16]
