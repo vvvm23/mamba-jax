@@ -2,8 +2,8 @@
 Unofficial Implementation of "Mamba: Linear-Time Sequence Modeling with
 Selective State Spaces" in JAX.
 
-> This is very much a work-in-progress implementation. Expect numerical
-> mismatches, slower speeds, bad code, and general wrongness herein.
+> ⚠️ **This is very much a work-in-progress implementation. Expect numerical**
+> **mismatches, slower speeds, bad code, and general wrongness herein.** ⚠️
 
 ## Installation
 
@@ -26,21 +26,23 @@ implemented. However, I optimistically pin the versions for now.
 The script `sample.py` is the main entry point to sample from a pretrained
 Mamba model:
 ```
-usage: sample.py [-h] [--prompt PROMPT] [--model MODEL] [--bf16]
-                 [--gen-len GEN_LEN] [--temperature TEMPERATURE] [--seed SEED]
-                 [--seed_iters SEED_ITERS]
+usage: sample.py [-h] [--prompt PROMPT] [--model MODEL] [--bf16] [--gen_len GEN_LEN]
+                 [--temperature TEMPERATURE] [--seed SEED] [--seed_iters SEED_ITERS]
+                 [--scan]
 
 options:
   -h, --help            show this help message and exit
-  --prompt PROMPT       Starting prompt for generation.
-  --model MODEL         Model repo id as on Huggingface Hub.
-  --bf16                Use bfloat16 for inference
-  --gen_len GEN_LEN     Length of generated sequence.
+  --prompt PROMPT       Starting prompt for generation. (default: Aloha, World! )
+  --model MODEL         Model repo id as on Huggingface Hub. (default: state-
+                        spaces/mamba-2.8b)
+  --bf16                Use bfloat16 for inference (default: False)
+  --gen_len GEN_LEN     Length of generated sequence. (default: 1024)
   --temperature TEMPERATURE
-                        Sampling temperature.
-  --seed SEED           Random seed for PRNG initialisation.
+                        Sampling temperature. (default: 1.0)
+  --seed SEED           Random seed for PRNG initialisation. (default: 0)
   --seed_iters SEED_ITERS
-                        Number of seeds to generate, starting from --seed.
+                        Number of seeds to generate, starting from --seed. (default: 1)
+  --scan                Use jax.lax.scan version of generate loop. (default: False)
 ```
 
 ### Mamba Components

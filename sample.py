@@ -59,7 +59,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--prompt", type=str, default="Aloha, World! ", help="Starting prompt for generation.")
     parser.add_argument(
         "--model", type=str, default="state-spaces/mamba-2.8b", help="Model repo id as on Huggingface Hub."
