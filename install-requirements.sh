@@ -7,4 +7,4 @@ pip install -IU --pre "jaxlib[cuda12_pip]==0.4.24.dev20240103" -f https://storag
 pip install --no-deps absl-py 'jax-triton @ git+https://github.com/jax-ml/jax-triton.git@7778c47c0a27c0988c914dce640dec61e44bbe8c'
 
 pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install git+https://github.com/patrick-kidger/equinox.git@dev einops huggingface_hub transformers matplotlib tqdm
+pip install git+https://github.com/patrick-kidger/equinox.git@dev einops huggingface_hub transformers matplotlib tqdm optax loguru wandb datasets
