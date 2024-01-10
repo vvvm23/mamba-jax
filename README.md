@@ -65,6 +65,7 @@ sub-components of it can be found in `mamba_jax.modelling.equinox` as
 - [ ] Add efficient training code in pure JAX.
 - [ ] Add efficient custom kernels for work-efficient associative scan, implemented in Pallas.
 - [ ] Try to reproduce some training results from scratch.
+- [ ] Complex number mode
 
 ---
 
