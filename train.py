@@ -1,6 +1,7 @@
 import argparse
 import json
 
+import datasets
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -18,26 +19,62 @@ from train_utils import (
 )
 
 
+# get dataset from huggingface based on args.dataset
 def setup_dataset(args):
-    pass
+    dataset = datasets.load_dataset(args.dataset)
 
 
 def setup_dataloaders(args, dataset):
     pass
 
 
-def setup_optimiser(args):
-    learning_rate = args.learning_rate
-    weight_decay = args.weight_decay
-    warmup_proportion = args.warmup_proportion
+def setup_optimiser(args, model):
+    lr = args.learning_rate
 
-    warmup_start_lr = args.warmup_start_lr
-    end_learning_rate = args.end_learning_rate
-    max_steps = args.max_steps
-    max_grad_norm = args.max_grad_norm
+    if args.use_lr_scheduler:
+        logger.info("Using learning rate scheduler")
+        warmup_steps = int(args.max_steps * args.warmup_proportion)
+        logger.info(f"{args.warmup_start_lr} -> {lr} (for {warmup_steps:,} steps)")
+        logger.info(f"{lr} -> {args.end_learning_rate} (for {args.max_steps - warmup_steps:,} steps)")
+        lr = optax.join_schedules(
+            [
+                optax.linear_schedule(
+                    args.warmup_start_lr,
+                    lr,
+                    warmup_steps,
+                ),
+                optax.linear_schedule(
+                    lr,
+                    args.end_learning_rate,
+                    args.max_steps - warmup_steps,
+                ),
+            ],
+            [warmup_steps],
+        )
 
-    # TODO: update for sharding
-    gradient_accumulation = args.batch_size // args.micro_batch_size
+    model = [model]
+    decay_spec = jax.tree_map(lambda _: "no_decay", eqx.filter(model, eqx.is_inexact_array))
+    is_decay_weight = lambda p: hasattr(p, "weight") and not hasattr(p, "num_embeddings")
+    where_decay_weight = lambda m: tuple(
+        p.weight for p in jax.tree_util.tree_leaves(m, is_leaf=is_decay_weight) if is_decay_weight(p)
+    )
+    decay_spec = eqx.tree_at(where_decay_weight, decay_spec, replace_fn=lambda _: "decay")
+
+    optimiser = optax.chain(
+        optax.clip_by_global_norm(args.max_grad_norm),
+        optax.multi_transform(
+            {
+                "decay": optax.adamw(learning_rate=lr, weight_decay=args.weight_decay),
+                "no_decay": optax.adamw(learning_rate=lr, weight_decay=0.0),
+            },
+            decay_spec,
+        ),
+    )
+
+    # TODO: update steps for sharing (essentially multiply micro_batch_size by num_devices)
+    optimiser = optax.MultiSteps(optimiser, args.batch_size // args.micro_batch_size)
+
+    return optimiser
 
 
 def create_step_fn(args, model, optimiser):
@@ -104,6 +141,7 @@ def main(args):
     for k, v in model_kwargs.items():
         logger.info(f"\t{k}: {v}")
     model = MambaLLM(**model_kwargs)
+    model = [model]
 
     num_parameters = jax.tree_util.tree_reduce(lambda s, p: s + (p.size if eqx.is_array(p) else 0), model, 0)
     logger.info(f"Model has {num_parameters:,} parameters.")
@@ -113,7 +151,7 @@ def main(args):
     train_dataset, eval_dataset = setup_dataset(args)
     train_loader, eval_loader = setup_dataloaders(args, train_dataset), setup_dataloaders(args, eval_dataset)
 
-    optimiser = setup_optimiser(args)
+    optimiser = setup_optimiser(args, model)
 
     train_step, eval_step, opt_state = create_step_fn(args, model, optimiser)
 
@@ -205,6 +243,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for the optimizer.")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum gradient norm for gradient clipping.")
+    parser.add_argument("--use_lr_scheduler", action="store_true", help="Use learning rate scheduler.")
 
     # MambaLM args
     parser.add_argument("--dim", type=int, default=1024, help="Model dimension.")
