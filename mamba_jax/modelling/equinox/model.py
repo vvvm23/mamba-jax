@@ -5,6 +5,7 @@ import equinox.nn as nn
 import jax
 import jax.numpy as jnp
 
+from ...kernels.interface import KernelType
 from .blocks import ResidualBlock, create_block
 from .utils import cast_eqx_layer
 
@@ -44,7 +45,7 @@ class MambaModel(eqx.Module):
         dt_init_floor: float = 1e-4,
         conv_bias: bool = True,
         bias: bool = False,
-        use_kernel: bool = False,
+        kernel_mode: KernelType = KernelType.XLA,
         pad_vocab_mult: int = 0,
         norm_eps: float = 1e-5,
         # TODO: add norm type (rms or layer)
@@ -81,7 +82,7 @@ class MambaModel(eqx.Module):
                 dt_init_floor=dt_init_floor,
                 conv_bias=conv_bias,
                 bias=bias,
-                use_kernel=use_kernel,
+                kernel_mode=kernel_mode,
                 layer_idx=i,
                 norm_eps=norm_eps,
                 res_dtype=res_dtype,
@@ -151,7 +152,7 @@ class MambaLLM(eqx.Module):
         dt_init_floor: float = 1e-4,
         conv_bias: bool = True,
         bias: bool = False,
-        use_kernel: bool = False,
+        kernel_mode: KernelType = KernelType.XLA,
         pad_vocab_mult: int = 0,
         norm_eps: float = 1e-5,
         # TODO: add norm type (rms or layer)
@@ -177,7 +178,7 @@ class MambaLLM(eqx.Module):
             dt_init_floor=dt_init_floor,
             conv_bias=conv_bias,
             bias=bias,
-            use_kernel=use_kernel,
+            kernel_mode=kernel_mode,
             pad_vocab_mult=pad_vocab_mult,
             norm_eps=norm_eps,
             # TODO: add norm type (rms or layer)
