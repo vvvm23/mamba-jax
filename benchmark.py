@@ -12,6 +12,7 @@ import numpy as np
 import tqdm
 from einops import einsum
 
+from mamba_jax.kernels.interface import KernelType
 from mamba_jax.kernels.reference import mamba_ssm
 from mamba_jax.modelling.equinox import load_pretrained
 
@@ -127,6 +128,65 @@ def mamba_llm_sample_graph():
     plt.savefig("sample-benchmark.png")
 
 
+def mamba_llm_throughput_graph():
+    model_list = [
+        "state-spaces/mamba-130m",
+        "state-spaces/mamba-370m",
+        "state-spaces/mamba-790m",
+        "state-spaces/mamba-1.4b",
+        "state-spaces/mamba-2.8b",
+    ]
+
+    iters = 5
+    L = 2**12
+    input_ids = jnp.array([111] * L, dtype=int)
+
+    labels = []
+
+    times = []
+    mode = KernelType.XLA_ASSOCIATIVE
+    for model_name in model_list:
+        eqx.clear_caches()
+        jax.clear_caches()
+        print(model_name)
+        model, _ = load_pretrained(model_name, dtype=jnp.bfloat16, kernel_mode=mode)
+        model = eqx.filter_jit(model)
+
+        model(input_ids)
+
+        start_time = time.time()
+        for _ in tqdm.trange(iters):
+            model(input_ids)
+        time_per_token = (time.time() - start_time) / iters
+
+        labels.append(model_name + "+associative")
+        times.append(time_per_token)
+
+    mode = KernelType.XLA
+    for model_name in model_list:
+        eqx.clear_caches()
+        jax.clear_caches()
+        print(model_name)
+        model, _ = load_pretrained(model_name, dtype=jnp.bfloat16, kernel_mode=mode)
+        model = eqx.filter_jit(model)
+
+        model(input_ids)
+
+        start_time = time.time()
+        for _ in tqdm.trange(iters):
+            model(input_ids)
+        time_per_token = (time.time() - start_time) / iters
+
+        labels.append(model_name + "+scan")
+        times.append(time_per_token)
+
+    plt.xlabel("Model")
+    plt.xticks(rotation=90)
+    plt.ylabel("Time s")
+    plt.bar(labels, times)
+    plt.savefig("sample-benchmark.png", bbox_inches="tight")
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "graph":
         scan_vs_associative_graph()
@@ -134,6 +194,10 @@ if __name__ == "__main__":
 
     if sys.argv[1] == "sample":
         mamba_llm_sample_graph()
+        exit()
+
+    if sys.argv[1] == "throughput":
+        mamba_llm_throughput_graph()
         exit()
 
     with jax.profiler.trace("/tmp/tensorboard"):
