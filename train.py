@@ -33,7 +33,7 @@ def setup_dataset(args):
     def transform_fn(batch):
         batch = batch["text"]
         batch = [example.ljust(args.sequence_length) for example in batch]
-        bytes = torch.tensor([[ord(c) for c in example] for example in batch], dtype=torch.uint8)
+        bytes = torch.tensor([[ord(c) for c in example] for example in batch], dtype=int)
         bytes[bytes == ord(" ")] = space_or_pad
         input_ids = bytes - lower
 
@@ -92,7 +92,6 @@ def setup_optimiser(args, model):
             [warmup_steps],
         )
 
-    model = [model]  # hack with equinox + optax
     decay_spec = jax.tree_map(lambda _: "no_decay", eqx.filter(model, eqx.is_inexact_array))
     is_decay_weight = lambda p: hasattr(p, "weight") and not hasattr(p, "num_embeddings")
     where_decay_weight = lambda m: tuple(
@@ -118,24 +117,40 @@ def setup_optimiser(args, model):
 
 
 def create_step_fn(args, model, optimiser):
-    opt_state = optimiser.init(eqx.filter([model], eqx.is_inexact_array))
+    # import ipdb; ipdb.set_trace()
+    opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
 
     def loss_fn(model, batch):
-        pass
+        # TODO: fix this as this actually results in -1 the sequence length
+        input_ids, labels = jnp.copy(batch[:, :-1]), jnp.copy(batch[:, 1:])
+        logits = jax.vmap(model[0])(input_ids)
+        num_tokens = (labels != -100).sum()
+        accuracy = jnp.argmax(logits, axis=-1) == labels
+        loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
+
+        accuracy = jnp.where(labels == -100, 0, accuracy).sum() / num_tokens
+        loss = jnp.where(labels == -100, 0, loss).sum() / num_tokens
+
+        return loss, accuracy
 
     def prepare_batch(batch):
-        return batch
+        return batch["input_ids"]
 
     @eqx.filter_jit
     def train_step(model, opt_state, batch):
         batch = prepare_batch(batch)
-        metrics = {"loss": 0.0, "accuracy": 1.0}
+        (loss, accuracy), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model, batch)
+        updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
+        model = eqx.apply_updates(model, updates)
+
+        metrics = {"loss": loss, "accuracy": accuracy}
         return model, opt_state, metrics
 
     @eqx.filter_jit
     def eval_step(model, batch):
         batch = prepare_batch(batch)
-        metrics = {"loss": 0.0, "accuracy": 1.0}
+        loss, accuracy = loss_fn(model, batch)
+        metrics = {"loss": loss, "accuracy": accuracy}
         return metrics
 
     return train_step, eval_step, opt_state
@@ -181,6 +196,8 @@ def main(args):
         "dtype": jnp.bfloat16 if args.bf16 else jnp.float32,
         "key": model_key,
     }
+
+    assert model_kwargs["dtype"] == jnp.bfloat16
     logger.info("Initialising model with arguments:")
     for k, v in model_kwargs.items():
         logger.info(f"\t{k}: {v}")
@@ -195,6 +212,7 @@ def main(args):
     train_loader, eval_loader = setup_dataloaders(args, train_dataset, eval_dataset)
     train_iter, eval_iter = iter(train_loader), iter(eval_loader)
 
+    model = [model]
     optimiser = setup_optimiser(args, model)
 
     train_step, eval_step, opt_state = create_step_fn(args, model, optimiser)
@@ -254,15 +272,15 @@ def main(args):
 
             if step_idx > 0 and step_idx % args.save_freq == 0:
                 # save checkpoint
-                save_checkpoint(args, exp_dir, model, opt_state)
+                save_checkpoint(args, exp_dir, step_idx, model, opt_state)
 
     except BaseException as e:
         logger.warning("Caught exception.. Saving checkpoint before closing..")
-        save_checkpoint(args, exp_dir, model, opt_state)
+        save_checkpoint(args, exp_dir, "final_error", model, opt_state)
         raise e
 
     logger.info("Finished training.. Saving final checkpoint..")
-    save_checkpoint(args, exp_dir, model, opt_state)
+    save_checkpoint(args, exp_dir, "final", model, opt_state)
 
 
 if __name__ == "__main__":
@@ -272,9 +290,9 @@ if __name__ == "__main__":
 
     # logging args
     parser.add_argument("--max_steps", type=int, default=100000, help="Number of training steps.")
-    parser.add_argument("--log_freq", type=int, default=100, help="Frequency of logging train metrics.")
+    parser.add_argument("--log_freq", type=int, default=10, help="Frequency of logging train metrics.")
     parser.add_argument("--eval_freq", type=int, default=1000, help="Frequency of evaluation phase.")
-    parser.add_argument("--eval_iters", type=int, default=10, help="Number of iterations during evaluation phase.")
+    parser.add_argument("--eval_iters", type=int, default=100, help="Number of iterations during evaluation phase.")
     parser.add_argument("--save_freq", type=int, default=1000, help="Frequency of saving checkpoint.")
     parser.add_argument("--wandb", action="store_true", help="Log metrics to Weights & Biases.")
 
@@ -282,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset", type=str, default="afmck/text8-chunked1024", help="Dataset to use as on Huggingface hub."
     )
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument(
         "--micro_batch_size",
         type=int,
@@ -293,9 +311,9 @@ if __name__ == "__main__":
     parser.add_argument("--sequence_length", type=int, default=1024, help="Sequence length for training.")
 
     # optimiser args
-    parser.add_argument("--learning_rate", type=float, default=4e-4, help="Initial learning rate after warmup phase.")
+    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Initial learning rate after warmup phase.")
     parser.add_argument("--end_learning_rate", type=float, default=1e-6, help="End learning rate.")
-    parser.add_argument("--warmup_start_lr", type=float, default=1e-7, help="Warmup start learning rate.")
+    parser.add_argument("--warmup_start_lr", type=float, default=1e-5, help="Warmup start learning rate.")
     parser.add_argument(
         "--warmup_proportion", type=float, default=0.1, help="Proportion of warmup steps out of total steps."
     )
@@ -318,7 +336,7 @@ if __name__ == "__main__":
     parser.add_argument("--dt_init_floor", type=float, default=1e-4, help="TODO")
     parser.add_argument("--no_conv_bias", action="store_false", help="Do not use bias in Conv layer in Mamba block.")
     parser.add_argument("--bias", action="store_true", help="Use bias in linear layers.")
-    parser.add_argument("--use_kernel", action="store_true", help="TODO: replace with kernel mode Literal")
+    parser.add_argument("--kernel_mode", type=str, default="xla_associative", help="NotImplemented")
     parser.add_argument("--pad_vocab_mult", type=int, default=8, help="Pad vocab multiplier.")
     parser.add_argument("--norm_eps", type=float, default=1e-5, help="RMSNorm epsilon")
     parser.add_argument(

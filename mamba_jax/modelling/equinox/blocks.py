@@ -26,7 +26,7 @@ class MambaBlock(eqx.Module):
     out_proj: nn.Linear
 
     dtype: jnp.dtype = jnp.float32
-    kernel_model: KernelType = KernelType.XLA
+    kernel_mode: KernelType = KernelType.XLA
     layer_idx: int = None
     dt_rank: int
     state_dim: int
@@ -51,7 +51,7 @@ class MambaBlock(eqx.Module):
         key: jax.random.PRNGKey = None,
     ):
         super().__init__()
-        self.kernel_model = kernel_mode
+        self.kernel_mode = kernel_mode
         self.layer_idx = layer_idx
         self.dtype = dtype
         self.state_dim = state_dim
@@ -146,7 +146,7 @@ class MambaBlock(eqx.Module):
             D=self.D.astype(dtype=jnp.float32),
             delta_bias=None,
             delta_softplus=True,
-            mode=self.kernel_model,
+            mode=self.kernel_mode,
         )
 
         y = y * jax.nn.silu(z)

@@ -1,15 +1,18 @@
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
+import equinox as eqx
 import jax
 import numpy as np
 import torch
-import wandb
 from jax.experimental import mesh_utils
 from jax.sharding import PositionalSharding
 from loguru import logger
+
+import wandb
 
 
 def seed_others(seed):
@@ -65,5 +68,9 @@ def consolidate_metrics(metrics: Dict[str, jax.Array], step: int, prefix: str):
     return metrics, None
 
 
-def save_checkpoint(args, exp_dir, model, opt_state=None):
-    pass
+def save_checkpoint(args, exp_dir, name, model, opt_state=None):
+    path = exp_dir / f"checkpoint_{name}.eqx"
+    logger.info(f"Saving checkpoint to '{path}'..")
+    start_time = time.time()
+    eqx.tree_serialise_leaves(path, model)
+    logger.info(f"Finished saving in {time.time() - start_time:.3f} seconds")
