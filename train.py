@@ -1,13 +1,17 @@
 import argparse
 import json
+import string
 
 import datasets
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
+import torch
 from loguru import logger
+from torch.utils.data import DataLoader
 
+from mamba_jax.kernels.interface import KernelType
 from mamba_jax.modelling.equinox import MambaLLM
 from train_utils import (
     consolidate_metrics,
@@ -20,12 +24,48 @@ from train_utils import (
 
 
 # get dataset from huggingface based on args.dataset
+# TODO: support datasets with advanced tokenizers, and pre-tokenisation
 def setup_dataset(args):
+    lower, upper = string.ascii_lowercase[0], string.ascii_lowercase[-1]
+    lower, upper = ord(lower), ord(upper)
+    space_or_pad = upper + 1
+
+    def transform_fn(batch):
+        batch = batch["text"]
+        batch = [example.ljust(args.sequence_length) for example in batch]
+        bytes = torch.tensor([[ord(c) for c in example] for example in batch], dtype=torch.uint8)
+        bytes[bytes == ord(" ")] = space_or_pad
+        input_ids = bytes - lower
+
+        return {"input_ids": input_ids}
+
     dataset = datasets.load_dataset(args.dataset)
 
+    # TODO: chunk dataset to args.sequence_length (potentially adding extra rows)
 
-def setup_dataloaders(args, dataset):
-    pass
+    for split in ["train", "validation"]:
+        dataset[split].set_transform(transform_fn)
+
+    return dataset["train"], dataset["validation"]
+
+
+def setup_dataloaders(args, train_dataset, validation_dataset):
+    train_loader = DataLoader(
+        train_dataset, batch_size=args.micro_batch_size, shuffle=True, drop_last=True, num_workers=args.num_workers
+    )
+    validation_loader = DataLoader(
+        validation_dataset,
+        batch_size=args.micro_batch_size,
+        shuffle=False,
+        drop_last=True,
+        num_workers=args.num_workers,
+    )
+
+    return train_loader, validation_loader
+
+
+def torch_to_np_batch(batch):
+    return {k: v.numpy() for k, v in batch.items()}
 
 
 def setup_optimiser(args, model):
@@ -52,7 +92,7 @@ def setup_optimiser(args, model):
             [warmup_steps],
         )
 
-    model = [model]
+    model = [model]  # hack with equinox + optax
     decay_spec = jax.tree_map(lambda _: "no_decay", eqx.filter(model, eqx.is_inexact_array))
     is_decay_weight = lambda p: hasattr(p, "weight") and not hasattr(p, "num_embeddings")
     where_decay_weight = lambda m: tuple(
@@ -71,29 +111,31 @@ def setup_optimiser(args, model):
         ),
     )
 
-    # TODO: update steps for sharing (essentially multiply micro_batch_size by num_devices)
+    # TODO: update steps for sharding (essentially multiply micro_batch_size by num_devices)
     optimiser = optax.MultiSteps(optimiser, args.batch_size // args.micro_batch_size)
 
     return optimiser
 
 
 def create_step_fn(args, model, optimiser):
-    opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
+    opt_state = optimiser.init(eqx.filter([model], eqx.is_inexact_array))
 
     def loss_fn(model, batch):
         pass
 
     def prepare_batch(batch):
-        pass
+        return batch
 
     @eqx.filter_jit
     def train_step(model, opt_state, batch):
-        metrics = None
+        batch = prepare_batch(batch)
+        metrics = {"loss": 0.0, "accuracy": 1.0}
         return model, opt_state, metrics
 
     @eqx.filter_jit
     def eval_step(model, batch):
-        metrics = None
+        batch = prepare_batch(batch)
+        metrics = {"loss": 0.0, "accuracy": 1.0}
         return metrics
 
     return train_step, eval_step, opt_state
@@ -107,13 +149,15 @@ def main(args):
     seed_others(args.seed)
 
     if args.micro_batch_size is None:
-        args.micro_batch_size = args.micro_batch
+        args.micro_batch_size = args.batch_size
 
     # TODO: change micro batch size based on number of data parallel shards
 
     assert args.batch_size % args.micro_batch_size == 0, "Micro batch size must perfectly divide batch size"
 
     key, model_key = jax.random.split(key)
+
+    assert args.no_conv_bias
 
     model_kwargs = {
         "dim": args.dim,
@@ -128,9 +172,9 @@ def main(args):
         "dt_init": args.dt_init,
         "dt_scale": args.dt_scale,
         "dt_init_floor": args.dt_init_floor,
-        "conv_bias": args.conv_bias,
+        "conv_bias": args.no_conv_bias,
         "bias": args.bias,
-        "use_kernel": args.use_kernel,  # TODO: update to use kernel mode
+        "kernel_mode": KernelType.XLA_ASSOCIATIVE,  # TODO: select mode from arguments
         "pad_vocab_mult": args.pad_vocab_mult,
         "norm_eps": args.norm_eps,
         "res_dtype": jnp.bfloat16 if args.res_in_bf16 else jnp.float32,
@@ -141,7 +185,6 @@ def main(args):
     for k, v in model_kwargs.items():
         logger.info(f"\t{k}: {v}")
     model = MambaLLM(**model_kwargs)
-    model = [model]
 
     num_parameters = jax.tree_util.tree_reduce(lambda s, p: s + (p.size if eqx.is_array(p) else 0), model, 0)
     logger.info(f"Model has {num_parameters:,} parameters.")
@@ -149,7 +192,8 @@ def main(args):
     logger.info(f"Initialising '{args.dataset}' dataset")
 
     train_dataset, eval_dataset = setup_dataset(args)
-    train_loader, eval_loader = setup_dataloaders(args, train_dataset), setup_dataloaders(args, eval_dataset)
+    train_loader, eval_loader = setup_dataloaders(args, train_dataset, eval_dataset)
+    train_iter, eval_iter = iter(train_loader), iter(eval_loader)
 
     optimiser = setup_optimiser(args, model)
 
@@ -171,7 +215,13 @@ def main(args):
         train_metrics = None
         for step_idx in range(args.max_steps):
             # train phase
-            batch = next(train_loader)
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                train_iter = iter(train_loader)
+                batch = next(train_iter)
+
+            batch = torch_to_np_batch(batch)
             model, opt_state, metrics = train_step(model, opt_state, batch)
 
             train_metrics = update_metrics(metrics, train_metrics)
@@ -187,7 +237,12 @@ def main(args):
                 # eval phase
                 eval_metrics = None
                 for _ in range(args.eval_iters):
-                    eval_batch = next(eval_loader)
+                    try:
+                        eval_batch = next(eval_iter)
+                    except StopIteration:
+                        eval_iter = iter(eval_loader)
+                        eval_batch = next(eval_iter)
+                    eval_batch = torch_to_np_batch(eval_batch)
                     metrics = eval_step(model, eval_batch)
                     eval_metrics = update_metrics(metrics, eval_metrics)
 
@@ -220,28 +275,31 @@ if __name__ == "__main__":
     parser.add_argument("--log_freq", type=int, default=100, help="Frequency of logging train metrics.")
     parser.add_argument("--eval_freq", type=int, default=1000, help="Frequency of evaluation phase.")
     parser.add_argument("--eval_iters", type=int, default=10, help="Number of iterations during evaluation phase.")
-    parser.add_argument("--save_freq", type=int, default=10000, help="Frequency of saving checkpoint.")
+    parser.add_argument("--save_freq", type=int, default=1000, help="Frequency of saving checkpoint.")
     parser.add_argument("--wandb", action="store_true", help="Log metrics to Weights & Biases.")
 
     # data args
-    parser.add_argument("--dataset", type=str, default="openwebtext", help="Dataset to use as on Huggingface hub.")
+    parser.add_argument(
+        "--dataset", type=str, default="afmck/text8-chunked1024", help="Dataset to use as on Huggingface hub."
+    )
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     parser.add_argument(
         "--micro_batch_size",
         type=int,
-        default=4,
-        help="Micro batch size, used to calculate gradient accumulation steps.",
+        default=None,
+        help="Micro batch size, used to calculate gradient accumulation steps. If None, becomes equal to `batch_size`",
     )
     parser.add_argument("--num_workers", type=int, default=4, help="Number of worker processes for data loading.")
+    parser.add_argument("--sequence_length", type=int, default=1024, help="Sequence length for training.")
 
     # optimiser args
-    parser.add_argument("--learning_rate", type=float, default=3e-5, help="Initial learning rate after warmup phase.")
+    parser.add_argument("--learning_rate", type=float, default=4e-4, help="Initial learning rate after warmup phase.")
     parser.add_argument("--end_learning_rate", type=float, default=1e-6, help="End learning rate.")
-    parser.add_argument("--warmup_start_lr", type=float, default=1e-5, help="Warmup start learning rate.")
+    parser.add_argument("--warmup_start_lr", type=float, default=1e-7, help="Warmup start learning rate.")
     parser.add_argument(
         "--warmup_proportion", type=float, default=0.1, help="Proportion of warmup steps out of total steps."
     )
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay for the optimizer.")
+    parser.add_argument("--weight_decay", type=float, default=0.001, help="Weight decay for the optimizer.")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum gradient norm for gradient clipping.")
     parser.add_argument("--use_lr_scheduler", action="store_true", help="Use learning rate scheduler.")
 
@@ -258,7 +316,7 @@ if __name__ == "__main__":
     parser.add_argument("--dt_init", type=str, default="random", help="Initialisation method of delta projection")
     parser.add_argument("--dt_scale", type=float, default=1.0, help="Scale of initialisation of delta projection")
     parser.add_argument("--dt_init_floor", type=float, default=1e-4, help="TODO")
-    parser.add_argument("--conv_bias", action="store_true", help="Use bias in Conv layer in Mamba block.")
+    parser.add_argument("--no_conv_bias", action="store_false", help="Do not use bias in Conv layer in Mamba block.")
     parser.add_argument("--bias", action="store_true", help="Use bias in linear layers.")
     parser.add_argument("--use_kernel", action="store_true", help="TODO: replace with kernel mode Literal")
     parser.add_argument("--pad_vocab_mult", type=int, default=8, help="Pad vocab multiplier.")

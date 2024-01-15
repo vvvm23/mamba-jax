@@ -153,7 +153,7 @@ class MambaLLM(eqx.Module):
         conv_bias: bool = True,
         bias: bool = False,
         kernel_mode: KernelType = KernelType.XLA,
-        pad_vocab_mult: int = 0,
+        pad_vocab_mult: int = 8,
         norm_eps: float = 1e-5,
         # TODO: add norm type (rms or layer)
         res_dtype: jnp.dtype = jnp.float32,

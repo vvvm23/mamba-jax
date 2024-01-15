@@ -49,7 +49,10 @@ def update_metrics(metrics: Dict[str, jax.Array], running_metrics: Optional[Dict
         running_metrics = {k: 0.0 for k in metrics}
 
     for k, v in metrics.items():
-        running_metrics[k] += v.item()
+        if hasattr(v, "item"):
+            v = v.item()
+
+        running_metrics[k] += v
 
     return running_metrics
 
