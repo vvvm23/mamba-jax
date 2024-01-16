@@ -143,14 +143,14 @@ def create_step_fn(args, model, optimiser):
         updates, opt_state = optimiser.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
         model = eqx.apply_updates(model, updates)
 
-        metrics = {"loss": loss, "accuracy": accuracy}
+        metrics = {"loss": loss, "accuracy": accuracy, "bpt": loss / jnp.log(2)}
         return model, opt_state, metrics
 
     @eqx.filter_jit
     def eval_step(model, batch):
         batch = prepare_batch(batch)
         loss, accuracy = loss_fn(model, batch)
-        metrics = {"loss": loss, "accuracy": accuracy}
+        metrics = {"loss": loss, "accuracy": accuracy, "bpt": loss / jnp.log(2)}
         return metrics
 
     return train_step, eval_step, opt_state
