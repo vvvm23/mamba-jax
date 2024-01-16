@@ -103,8 +103,8 @@ def setup_optimiser(args, model):
         optax.clip_by_global_norm(args.max_grad_norm),
         optax.multi_transform(
             {
-                "decay": optax.adamw(learning_rate=lr, weight_decay=args.weight_decay),
-                "no_decay": optax.adamw(learning_rate=lr, weight_decay=0.0),
+                "decay": optax.adamw(learning_rate=lr, weight_decay=args.weight_decay, b1=args.beta1, b2=args.beta2),
+                "no_decay": optax.adamw(learning_rate=lr, weight_decay=0.0, b1=args.beta1, b2=args.beta2),
             },
             decay_spec,
         ),
@@ -249,7 +249,7 @@ def main(args):
                 if args.wandb:
                     wandb_logger.log(metrics, step=step_idx)
 
-                logger.info(f"[Train] Step {step_idx}: {metrics}")
+                logger.info(f"[Train] Step {step_idx}/{args.max_steps}: {metrics}")
 
             if step_idx > 0 and step_idx % args.eval_freq == 0:
                 # eval phase
@@ -268,7 +268,7 @@ def main(args):
                 if args.wandb:
                     wandb_logger.log(metrics, step=step_idx)
 
-                logger.info(f"[Eval] Step {step_idx}: {metrics}")
+                logger.info(f"[Eval] Step {step_idx}/{args.max_steps}: {metrics}")
 
             if step_idx > 0 and step_idx % args.save_freq == 0:
                 # save checkpoint
@@ -289,7 +289,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Random seed for PRNG initialisation.")
 
     # logging args
-    parser.add_argument("--max_steps", type=int, default=100000, help="Number of training steps.")
+    parser.add_argument("--max_steps", type=int, default=10000, help="Number of training steps.")
     parser.add_argument("--log_freq", type=int, default=10, help="Frequency of logging train metrics.")
     parser.add_argument("--eval_freq", type=int, default=1000, help="Frequency of evaluation phase.")
     parser.add_argument("--eval_iters", type=int, default=100, help="Number of iterations during evaluation phase.")
@@ -311,15 +311,17 @@ if __name__ == "__main__":
     parser.add_argument("--sequence_length", type=int, default=1024, help="Sequence length for training.")
 
     # optimiser args
-    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Initial learning rate after warmup phase.")
+    parser.add_argument("--learning_rate", type=float, default=6e-4, help="Initial learning rate after warmup phase.")
     parser.add_argument("--end_learning_rate", type=float, default=1e-6, help="End learning rate.")
     parser.add_argument("--warmup_start_lr", type=float, default=1e-5, help="Warmup start learning rate.")
     parser.add_argument(
         "--warmup_proportion", type=float, default=0.1, help="Proportion of warmup steps out of total steps."
     )
-    parser.add_argument("--weight_decay", type=float, default=0.001, help="Weight decay for the optimizer.")
+    parser.add_argument("--weight_decay", type=float, default=0.1, help="Weight decay for the optimizer.")
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Maximum gradient norm for gradient clipping.")
     parser.add_argument("--use_lr_scheduler", action="store_true", help="Use learning rate scheduler.")
+    parser.add_argument("--beta1", type=float, default=0.9, help="Adam beta1.")
+    parser.add_argument("--beta2", type=float, default=0.95, help="Adam beta2.")
 
     # MambaLM args
     parser.add_argument("--dim", type=int, default=1024, help="Model dimension.")
