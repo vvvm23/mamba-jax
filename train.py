@@ -170,10 +170,13 @@ def main(args):
 
     assert args.batch_size % args.micro_batch_size == 0, "Micro batch size must perfectly divide batch size"
 
+    grad_accumulation_steps = args.batch_size // args.micro_batch_size
+
     key, model_key = jax.random.split(key)
 
     assert args.no_conv_bias
 
+    # TODO: move this under a 'model_config' sub-dictionary so we can just do **config.model_config
     model_kwargs = {
         "dim": args.dim,
         "num_layers": args.num_layers,
@@ -197,7 +200,6 @@ def main(args):
         "key": model_key,
     }
 
-    assert model_kwargs["dtype"] == jnp.bfloat16
     logger.info("Initialising model with arguments:")
     for k, v in model_kwargs.items():
         logger.info(f"\t{k}: {v}")
@@ -232,20 +234,23 @@ def main(args):
     try:
         train_metrics = None
         for step_idx in range(args.max_steps):
-            # train phase
-            try:
-                batch = next(train_iter)
-            except StopIteration:
-                train_iter = iter(train_loader)
-                batch = next(train_iter)
+            for _ in range(grad_accumulation_steps):
+                # train phase
+                try:
+                    batch = next(train_iter)
+                except StopIteration:
+                    train_iter = iter(train_loader)
+                    batch = next(train_iter)
 
-            batch = torch_to_np_batch(batch)
-            model, opt_state, metrics = train_step(model, opt_state, batch)
+                batch = torch_to_np_batch(batch)
+                model, opt_state, metrics = train_step(model, opt_state, batch)
 
-            train_metrics = update_metrics(metrics, train_metrics)
+                train_metrics = update_metrics(metrics, train_metrics)
 
             if step_idx > 0 and step_idx % args.log_freq == 0:
-                metrics, train_metrics = consolidate_metrics(train_metrics, args.log_freq, "train")
+                metrics, train_metrics = consolidate_metrics(
+                    train_metrics, args.log_freq * grad_accumulation_steps, "train"
+                )
                 if args.wandb:
                     wandb_logger.log(metrics, step=step_idx)
 
@@ -255,16 +260,19 @@ def main(args):
                 # eval phase
                 eval_metrics = None
                 for _ in range(args.eval_iters):
-                    try:
-                        eval_batch = next(eval_iter)
-                    except StopIteration:
-                        eval_iter = iter(eval_loader)
-                        eval_batch = next(eval_iter)
-                    eval_batch = torch_to_np_batch(eval_batch)
-                    metrics = eval_step(model, eval_batch)
-                    eval_metrics = update_metrics(metrics, eval_metrics)
+                    for _ in range(grad_accumulation_steps):
+                        try:
+                            eval_batch = next(eval_iter)
+                        except StopIteration:
+                            eval_iter = iter(eval_loader)
+                            eval_batch = next(eval_iter)
+                        eval_batch = torch_to_np_batch(eval_batch)
+                        metrics = eval_step(model, eval_batch)
+                        eval_metrics = update_metrics(metrics, eval_metrics)
 
-                metrics, eval_metrics = consolidate_metrics(eval_metrics, args.eval_iters, "eval")
+                metrics, eval_metrics = consolidate_metrics(
+                    eval_metrics, args.eval_iters * grad_accumulation_steps, "eval"
+                )
                 if args.wandb:
                     wandb_logger.log(metrics, step=step_idx)
 
