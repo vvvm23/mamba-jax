@@ -13,6 +13,9 @@ class KernelType(Enum):
     XLA_ASSOCIATIVE = 2
 
 
+KernelTypeMapping = {"pallas": KernelType.PALLAS, "xla": KernelType.XLA, "xla_associative": KernelType.XLA_ASSOCIATIVE}
+
+
 # TODO: populate function that arranges data as expected by kernel and calls it
 # TODO: add `jax.custom_jvp` for calling correct kernel for fwd / bwd pass
 def mamba_ssm(

@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 from transformers import AutoTokenizer
 
-from mamba_jax.kernels.interface import KernelType
+from mamba_jax.kernels import KernelTypeMapping
 from mamba_jax.modelling.equinox import MambaLLM
 from mamba_jax.modelling.equinox.loader import load_pretrained
 
@@ -64,7 +64,7 @@ def load_local_model(args):
         "dt_init_floor": config.dt_init_floor,
         "conv_bias": config.no_conv_bias,
         "bias": config.bias,
-        "kernel_mode": KernelType.XLA_ASSOCIATIVE,  # TODO: select mode from arguments
+        "kernel_mode": KernelTypeMapping[config.kernel_mode],
         "pad_vocab_mult": config.pad_vocab_mult,
         "norm_eps": config.norm_eps,
         "res_dtype": jnp.bfloat16 if config.res_in_bf16 else jnp.float32,
@@ -85,7 +85,11 @@ def load_local_model(args):
 def main(args):
     # TODO: make this more robust as future models may not be under state-spaces namespace
     if args.model.startswith("state-spaces"):
-        model, tokenizer = load_pretrained(args.model, dtype=jnp.bfloat16 if args.bf16 else jnp.float32)
+        model, tokenizer = load_pretrained(
+            args.model,
+            dtype=jnp.bfloat16 if args.bf16 else jnp.float32,
+            kernel_mode=KernelTypeMapping[args.kernel_mode],
+        )
     else:  # is probably local model
         model, tokenizer = load_local_model(args)
 

@@ -1,6 +1,7 @@
 import argparse
 import json
 import string
+import time
 
 import datasets
 import equinox as eqx
@@ -11,7 +12,7 @@ import torch
 from loguru import logger
 from torch.utils.data import DataLoader
 
-from mamba_jax.kernels.interface import KernelType
+from mamba_jax.kernels import KernelTypeMapping
 from mamba_jax.modelling.equinox import MambaLLM
 from train_utils import (
     consolidate_metrics,
@@ -192,7 +193,7 @@ def main(args):
         "dt_init_floor": args.dt_init_floor,
         "conv_bias": args.no_conv_bias,
         "bias": args.bias,
-        "kernel_mode": KernelType.XLA_ASSOCIATIVE,  # TODO: select mode from arguments
+        "kernel_mode": KernelTypeMapping[args.kernel_mode],
         "pad_vocab_mult": args.pad_vocab_mult,
         "norm_eps": args.norm_eps,
         "res_dtype": jnp.bfloat16 if args.res_in_bf16 else jnp.float32,
@@ -233,6 +234,7 @@ def main(args):
     logger.info("Starting training loop..")
     try:
         train_metrics = None
+        start_time = time.time()
         for step_idx in range(args.max_steps):
             for _ in range(grad_accumulation_steps):
                 # train phase
@@ -254,7 +256,10 @@ def main(args):
                 if args.wandb:
                     wandb_logger.log(metrics, step=step_idx)
 
-                logger.info(f"[Train] Step {step_idx}/{args.max_steps}: {metrics}")
+                end_time = time.time()
+                batches_per_second = grad_accumulation_steps * args.log_freq / (end_time - start_time)
+                tokens_per_second = batches_per_second * batch["input_ids"].size
+                logger.info(f"[Train] Step {step_idx}/{args.max_steps}: {metrics} | tokens/s: {tokens_per_second}")
 
             if step_idx > 0 and step_idx % args.eval_freq == 0:
                 # eval phase
@@ -281,6 +286,9 @@ def main(args):
             if step_idx > 0 and step_idx % args.save_freq == 0:
                 # save checkpoint
                 save_checkpoint(args, exp_dir, step_idx, model, opt_state)
+
+            if step_idx > 0 and step_idx % args.log_freq == 0:
+                start_time = time.time()
 
     except BaseException as e:
         logger.warning("Caught exception.. Saving checkpoint before closing..")
@@ -346,7 +354,7 @@ if __name__ == "__main__":
     parser.add_argument("--dt_init_floor", type=float, default=1e-4, help="TODO")
     parser.add_argument("--no_conv_bias", action="store_false", help="Do not use bias in Conv layer in Mamba block.")
     parser.add_argument("--bias", action="store_true", help="Use bias in linear layers.")
-    parser.add_argument("--kernel_mode", type=str, default="xla_associative", help="NotImplemented")
+    parser.add_argument("--kernel_mode", type=str, default="xla_associative", help="Selects which Mamba Kernel to use.")
     parser.add_argument("--pad_vocab_mult", type=int, default=8, help="Pad vocab multiplier.")
     parser.add_argument("--norm_eps", type=float, default=1e-5, help="RMSNorm epsilon")
     parser.add_argument(
