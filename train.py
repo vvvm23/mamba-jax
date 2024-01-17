@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import json
 import string
 import time
@@ -264,20 +265,34 @@ def main(args):
             if step_idx > 0 and step_idx % args.eval_freq == 0:
                 # eval phase
                 eval_metrics = None
-                for _ in range(args.eval_iters):
+                num_eval_micro_batches = 0
+
+                for _ in range(args.eval_iters) if args.eval_iters > 0 else itertools.count():
+                    # ensures consistent for different micro batch sizes, given same global batch size
+                    end = True
                     for _ in range(grad_accumulation_steps):
                         try:
                             eval_batch = next(eval_iter)
                         except StopIteration:
                             eval_iter = iter(eval_loader)
+                            if args.eval_iters == 0:
+                                break
                             eval_batch = next(eval_iter)
                         eval_batch = torch_to_np_batch(eval_batch)
                         metrics = eval_step(model, eval_batch)
                         eval_metrics = update_metrics(metrics, eval_metrics)
+                        num_eval_micro_batches += 1
+                    else:
+                        # if we didn't break then continue the outer loop
+                        # we would only break if args.eval_iters == 0 (eval on
+                        # whole dataset) and dataset was exhausted
+                        # this isn't possible otherwise
+                        end = False
 
-                metrics, eval_metrics = consolidate_metrics(
-                    eval_metrics, args.eval_iters * grad_accumulation_steps, "eval"
-                )
+                    if end:
+                        break
+
+                metrics, eval_metrics = consolidate_metrics(eval_metrics, num_eval_micro_batches, "eval")
                 if args.wandb:
                     wandb_logger.log(metrics, step=step_idx)
 
@@ -308,7 +323,12 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=10000, help="Number of training steps.")
     parser.add_argument("--log_freq", type=int, default=10, help="Frequency of logging train metrics.")
     parser.add_argument("--eval_freq", type=int, default=1000, help="Frequency of evaluation phase.")
-    parser.add_argument("--eval_iters", type=int, default=100, help="Number of iterations during evaluation phase.")
+    parser.add_argument(
+        "--eval_iters",
+        type=int,
+        default=0,
+        help="Number of iterations during evaluation phase. Defaults to 0, which uses the entire evalulation dataset.",
+    )
     parser.add_argument("--save_freq", type=int, default=1000, help="Frequency of saving checkpoint.")
     parser.add_argument("--wandb", action="store_true", help="Log metrics to Weights & Biases.")
 
