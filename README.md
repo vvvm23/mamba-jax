@@ -174,10 +174,10 @@ sub-components of it can be found in `mamba_jax.modelling.equinox` as
 - PRs for other neural network APIs (Flax, NNX) welcome.
 
 ## Roadmap
-- [ ] Make this all pip installable.
-- [ ] Testing to 100% verify parity with CUDA reference.
-- [ ] Add efficient training code in pure JAX.
+- [X] Add training code for some simple task.
 - [ ] Add efficient custom kernels for work-efficient associative scan, implemented in Pallas.
+- [ ] Testing to 100% verify parity with CUDA reference.
+- [ ] Make this all pip installable.
 - [ ] Try to reproduce some training results from scratch.
 - [ ] Complex number mode
 
