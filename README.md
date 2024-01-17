@@ -51,6 +51,11 @@ Currently, it only supports Text8 style datasets (search for `afmck/text8` on
 the Huggingface hub) for next-character prediction. Further dataset support
 will come later, though it should be trivial to add this.
 
+> ⚠ Training is still experimental and may contain mistakes. Currently it
+> converges but it is unclear if it is performing as well as it should. We also do
+> not have (yet) a custom kernel for efficient training, like in the original
+> implementation. ⚠
+
 Usage is as follows:
 ```
 usage: train.py [-h] [--bf16] [--seed SEED] [--max_steps MAX_STEPS]
