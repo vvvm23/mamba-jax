@@ -14,7 +14,7 @@ def setup_dataset(args):
 
     def transform_fn(batch):
         batch = batch["text"]
-        batch = [example.ljust(args.sequence_length) for example in batch]
+        batch = [example.ljust(args.sequence_length + 1) for example in batch]
         bytes = torch.tensor([[ord(c) for c in example] for example in batch], dtype=int)
         bytes[bytes == ord(" ")] = space_or_pad
         input_ids = bytes - lower
