@@ -1,3 +1,4 @@
+# TODO: maybe remain to just `utils.py`
 import random
 import time
 from datetime import datetime
@@ -8,11 +9,10 @@ import equinox as eqx
 import jax
 import numpy as np
 import torch
+import wandb
 from jax.experimental import mesh_utils
 from jax.sharding import PositionalSharding
 from loguru import logger
-
-import wandb
 
 
 def seed_others(seed):

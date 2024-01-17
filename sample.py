@@ -14,6 +14,7 @@ from mamba_jax.modelling.equinox import MambaLLM
 from mamba_jax.modelling.equinox.loader import load_pretrained
 
 
+# simple tokenizer for Text8 generation task
 class Text8Tokenizer:
     def __init__(self):
         lower, upper = string.ascii_lowercase[0], string.ascii_lowercase[-1]
@@ -49,29 +50,8 @@ def load_local_model(args):
     config = SimpleNamespace(**config)
 
     # TODO: move this under a 'model_config' sub-dictionary so we can just do **config.model_config
-    model_kwargs = {
-        "dim": config.dim,
-        "num_layers": config.num_layers,
-        "vocab_size": config.vocab_size,
-        "state_dim": config.state_dim,
-        "kernel_size": config.kernel_size,
-        "expand": config.expand,
-        "dt_rank": config.dt_rank,
-        "dt_min": config.dt_min,
-        "dt_max": config.dt_max,
-        "dt_init": config.dt_init,
-        "dt_scale": config.dt_scale,
-        "dt_init_floor": config.dt_init_floor,
-        "conv_bias": config.no_conv_bias,
-        "bias": config.bias,
-        "kernel_mode": KernelTypeMapping[config.kernel_mode],
-        "pad_vocab_mult": config.pad_vocab_mult,
-        "norm_eps": config.norm_eps,
-        "res_dtype": jnp.bfloat16 if config.res_in_bf16 else jnp.float32,
-        "dtype": jnp.bfloat16 if config.bf16 else jnp.float32,
-        "key": jax.random.PRNGKey(0),  # dummy key as we will overwrite weights later
-    }
-    model = MambaLLM(**model_kwargs)
+    model_kwargs = MambaLLM.args_namespace_to_model_kwargs(config)
+    model = MambaLLM(**model_kwargs, key=jax.random.PRNGKey(0))
     model = eqx.tree_deserialise_leaves(args.model, like=model)
 
     # tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
@@ -121,7 +101,7 @@ def main(args):
         print()
         print(tokenizer.decode(input_ids, skip_special_tokens=True), flush=True, end="")
 
-        # prefill
+        # "prefill"
         for input_id in input_ids[:-1]:
             _, cache = generate_step(input_id, cache=cache)
 

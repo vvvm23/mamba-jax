@@ -5,7 +5,7 @@ import equinox.nn as nn
 import jax
 import jax.numpy as jnp
 
-from ...kernels.interface import KernelType
+from ...kernels.interface import KernelType, KernelTypeMapping
 from .blocks import ResidualBlock, create_block
 from .utils import cast_eqx_layer
 
@@ -229,3 +229,30 @@ class MambaLLM(eqx.Module):
         _, output_ids = jax.lax.scan(generate_scan, init=(cache, input_ids[-1], key), xs=jnp.arange(gen_len)[:, None])
 
         return jnp.concatenate([input_ids, output_ids])
+
+    # TODO: does this belong here? weakly couples MambaLLM implementation with args in train.py
+    @staticmethod
+    def args_namespace_to_model_kwargs(args):
+        model_kwargs = {
+            "dim": args.dim,
+            "num_layers": args.num_layers,
+            "vocab_size": args.vocab_size,
+            "state_dim": args.state_dim,
+            "kernel_size": args.kernel_size,
+            "expand": args.expand,
+            "dt_rank": args.dt_rank,
+            "dt_min": args.dt_min,
+            "dt_max": args.dt_max,
+            "dt_init": args.dt_init,
+            "dt_scale": args.dt_scale,
+            "dt_init_floor": args.dt_init_floor,
+            "conv_bias": args.no_conv_bias,
+            "bias": args.bias,
+            "kernel_mode": KernelTypeMapping[args.kernel_mode],
+            "pad_vocab_mult": args.pad_vocab_mult,
+            "norm_eps": args.norm_eps,
+            "res_dtype": jnp.bfloat16 if args.res_in_bf16 else jnp.float32,
+            "dtype": jnp.bfloat16 if args.bf16 else jnp.float32,
+        }
+
+        return model_kwargs

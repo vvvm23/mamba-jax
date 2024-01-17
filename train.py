@@ -1,19 +1,15 @@
 import argparse
 import itertools
 import json
-import string
 import time
 
-import datasets
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-import torch
 from loguru import logger
-from torch.utils.data import DataLoader
 
-from mamba_jax.kernels import KernelTypeMapping
+from dataset import setup_dataloaders, setup_dataset, torch_to_np_batch
 from mamba_jax.modelling.equinox import MambaLLM
 from train_utils import (
     consolidate_metrics,
@@ -25,51 +21,8 @@ from train_utils import (
 )
 
 
-# get dataset from huggingface based on args.dataset
-# TODO: support datasets with advanced tokenizers, and pre-tokenisation
-def setup_dataset(args):
-    lower, upper = string.ascii_lowercase[0], string.ascii_lowercase[-1]
-    lower, upper = ord(lower), ord(upper)
-    space_or_pad = upper + 1
-
-    def transform_fn(batch):
-        batch = batch["text"]
-        batch = [example.ljust(args.sequence_length) for example in batch]
-        bytes = torch.tensor([[ord(c) for c in example] for example in batch], dtype=int)
-        bytes[bytes == ord(" ")] = space_or_pad
-        input_ids = bytes - lower
-
-        return {"input_ids": input_ids}
-
-    dataset = datasets.load_dataset(args.dataset)
-
-    # TODO: chunk dataset to args.sequence_length (potentially adding extra rows)
-
-    for split in ["train", "validation"]:
-        dataset[split].set_transform(transform_fn)
-
-    return dataset["train"], dataset["validation"]
-
-
-def setup_dataloaders(args, train_dataset, validation_dataset):
-    train_loader = DataLoader(
-        train_dataset, batch_size=args.micro_batch_size, shuffle=True, drop_last=True, num_workers=args.num_workers
-    )
-    validation_loader = DataLoader(
-        validation_dataset,
-        batch_size=args.micro_batch_size,
-        shuffle=False,
-        drop_last=True,
-        num_workers=args.num_workers,
-    )
-
-    return train_loader, validation_loader
-
-
-def torch_to_np_batch(batch):
-    return {k: v.numpy() for k, v in batch.items()}
-
-
+# setting up Optax optimiser with optional lr scheduler, weight decay, and
+# gradient accumulation
 def setup_optimiser(args, model):
     lr = args.learning_rate
 
@@ -118,8 +71,8 @@ def setup_optimiser(args, model):
     return optimiser
 
 
+# create jit-compiled train & eval steps, and also initialise optimiser
 def create_step_fn(args, model, optimiser):
-    # import ipdb; ipdb.set_trace()
     opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
 
     def loss_fn(model, batch):
@@ -161,72 +114,50 @@ def create_step_fn(args, model, optimiser):
 def main(args):
     logger.info("Starting training script..")
 
+    # seed prng
     logger.info(f"Initialising PRNG state from seed {args.seed}")
     key = jax.random.PRNGKey(args.seed)
     seed_others(args.seed)
 
+    # calculating micro batch size and accumulation steps
+    # TODO: change micro batch size based on number of data parallel shards
     if args.micro_batch_size is None:
         args.micro_batch_size = args.batch_size
-
-    # TODO: change micro batch size based on number of data parallel shards
-
     assert args.batch_size % args.micro_batch_size == 0, "Micro batch size must perfectly divide batch size"
-
     grad_accumulation_steps = args.batch_size // args.micro_batch_size
 
+    # initialising random model
     key, model_key = jax.random.split(key)
-
-    assert args.no_conv_bias
-
-    # TODO: move this under a 'model_config' sub-dictionary so we can just do **config.model_config
-    model_kwargs = {
-        "dim": args.dim,
-        "num_layers": args.num_layers,
-        "vocab_size": args.vocab_size,
-        "state_dim": args.state_dim,
-        "kernel_size": args.kernel_size,
-        "expand": args.expand,
-        "dt_rank": args.dt_rank,
-        "dt_min": args.dt_min,
-        "dt_max": args.dt_max,
-        "dt_init": args.dt_init,
-        "dt_scale": args.dt_scale,
-        "dt_init_floor": args.dt_init_floor,
-        "conv_bias": args.no_conv_bias,
-        "bias": args.bias,
-        "kernel_mode": KernelTypeMapping[args.kernel_mode],
-        "pad_vocab_mult": args.pad_vocab_mult,
-        "norm_eps": args.norm_eps,
-        "res_dtype": jnp.bfloat16 if args.res_in_bf16 else jnp.float32,
-        "dtype": jnp.bfloat16 if args.bf16 else jnp.float32,
-        "key": model_key,
-    }
+    model_kwargs = MambaLLM.args_namespace_to_model_kwargs(args)
 
     logger.info("Initialising model with arguments:")
     for k, v in model_kwargs.items():
         logger.info(f"\t{k}: {v}")
-    model = MambaLLM(**model_kwargs)
+    model = MambaLLM(**model_kwargs, key=model_key)
 
     num_parameters = jax.tree_util.tree_reduce(lambda s, p: s + (p.size if eqx.is_array(p) else 0), model, 0)
     logger.info(f"Model has {num_parameters:,} parameters.")
 
+    # initialising dataset
     logger.info(f"Initialising '{args.dataset}' dataset")
-
     train_dataset, eval_dataset = setup_dataset(args)
     train_loader, eval_loader = setup_dataloaders(args, train_dataset, eval_dataset)
     train_iter, eval_iter = iter(train_loader), iter(eval_loader)
 
-    model = [model]
+    model = [model]  # annoying hack with Equinox + Optax
     optimiser = setup_optimiser(args, model)
 
+    # create the jit-compiled train & eval steps, as well as init optimiser
     train_step, eval_step, opt_state = create_step_fn(args, model, optimiser)
 
+    # create training directory and dump config there
     exp_dir = make_experiment_directory(args)
     logger.info(f"Experiment directory: {exp_dir}")
 
     with open(exp_dir / "config.json", "w") as f:
         json.dump(vars(args), f, indent=4)
 
+    # init wandb if args.wandb present
     if args.wandb:
         logger.info("Initialising W&B")
     wandb_logger = wandb_init(args)
@@ -250,6 +181,7 @@ def main(args):
 
                 train_metrics = update_metrics(metrics, train_metrics)
 
+            # log train metrics and reset them
             if step_idx > 0 and step_idx % args.log_freq == 0:
                 metrics, train_metrics = consolidate_metrics(
                     train_metrics, args.log_freq * grad_accumulation_steps, "train"
@@ -303,11 +235,15 @@ def main(args):
                 save_checkpoint(args, exp_dir, step_idx, model, opt_state)
 
             if step_idx > 0 and step_idx % args.log_freq == 0:
+                # reset train throughput timer
+                # we delay this to the end of the loop to ensure no false
+                # readings involving eval or checkpoint save phase.
                 start_time = time.time()
 
     except BaseException as e:
+        # if exception, save the model before closing
         logger.warning("Caught exception.. Saving checkpoint before closing..")
-        save_checkpoint(args, exp_dir, "final_error", model, opt_state)
+        save_checkpoint(args, exp_dir, "final", model, opt_state)
         raise e
 
     logger.info("Finished training.. Saving final checkpoint..")

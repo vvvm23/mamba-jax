@@ -17,7 +17,8 @@ KernelTypeMapping = {"pallas": KernelType.PALLAS, "xla": KernelType.XLA, "xla_as
 
 
 # TODO: populate function that arranges data as expected by kernel and calls it
-# TODO: add `jax.custom_jvp` for calling correct kernel for fwd / bwd pass
+# TODO: add `jax.custom_jvp` for calling correct kernel for fwd / bwd pass, when
+# use Pallas mode.
 def mamba_ssm(
     u: jax.Array,
     delta: jax.Array,
