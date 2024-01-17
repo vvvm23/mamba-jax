@@ -13,8 +13,12 @@ class KernelType(Enum):
     XLA_ASSOCIATIVE = 2
 
 
+KernelTypeMapping = {"pallas": KernelType.PALLAS, "xla": KernelType.XLA, "xla_associative": KernelType.XLA_ASSOCIATIVE}
+
+
 # TODO: populate function that arranges data as expected by kernel and calls it
-# TODO: add `jax.custom_jvp` for calling correct kernel for fwd / bwd pass
+# TODO: add `jax.custom_jvp` for calling correct kernel for fwd / bwd pass, when
+# use Pallas mode.
 def mamba_ssm(
     u: jax.Array,
     delta: jax.Array,
@@ -30,13 +34,13 @@ def mamba_ssm(
         raise NotImplementedError
     elif mode == KernelType.XLA:
         # let JAX handle backwards pass in reference kernel
-        return mamba_ssm_xla(
-            u, delta, A, B, C, D=D, delta_bias=delta_bias, delta_softplus=delta_softplus, associative_scan=False
+        return jax.checkpoint(mamba_ssm_xla, static_argnums=(-1, -2))(
+            u, delta, A, B, C, D, delta_bias, delta_softplus, False
         )
     elif mode == KernelType.XLA_ASSOCIATIVE:
         # reference kernel with associative scan
-        return mamba_ssm_xla(
-            u, delta, A, B, C, D=D, delta_bias=delta_bias, delta_softplus=delta_softplus, associative_scan=True
+        return jax.checkpoint(mamba_ssm_xla, static_argnums=(-1, -2))(
+            u, delta, A, B, C, D, delta_bias, delta_softplus, True
         )
 
 

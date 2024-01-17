@@ -5,6 +5,7 @@ import equinox.nn as nn
 import jax
 import jax.numpy as jnp
 
+from ...kernels.interface import KernelType, KernelTypeMapping
 from .blocks import ResidualBlock, create_block
 from .utils import cast_eqx_layer
 
@@ -44,7 +45,7 @@ class MambaModel(eqx.Module):
         dt_init_floor: float = 1e-4,
         conv_bias: bool = True,
         bias: bool = False,
-        use_kernel: bool = False,
+        kernel_mode: KernelType = KernelType.XLA,
         pad_vocab_mult: int = 0,
         norm_eps: float = 1e-5,
         # TODO: add norm type (rms or layer)
@@ -81,7 +82,7 @@ class MambaModel(eqx.Module):
                 dt_init_floor=dt_init_floor,
                 conv_bias=conv_bias,
                 bias=bias,
-                use_kernel=use_kernel,
+                kernel_mode=kernel_mode,
                 layer_idx=i,
                 norm_eps=norm_eps,
                 res_dtype=res_dtype,
@@ -151,8 +152,8 @@ class MambaLLM(eqx.Module):
         dt_init_floor: float = 1e-4,
         conv_bias: bool = True,
         bias: bool = False,
-        use_kernel: bool = False,
-        pad_vocab_mult: int = 0,
+        kernel_mode: KernelType = KernelType.XLA,
+        pad_vocab_mult: int = 8,
         norm_eps: float = 1e-5,
         # TODO: add norm type (rms or layer)
         res_dtype: jnp.dtype = jnp.float32,
@@ -177,7 +178,7 @@ class MambaLLM(eqx.Module):
             dt_init_floor=dt_init_floor,
             conv_bias=conv_bias,
             bias=bias,
-            use_kernel=use_kernel,
+            kernel_mode=kernel_mode,
             pad_vocab_mult=pad_vocab_mult,
             norm_eps=norm_eps,
             # TODO: add norm type (rms or layer)
@@ -186,10 +187,12 @@ class MambaLLM(eqx.Module):
             key=model_key,
         )
 
-        self.lm_head = cast_eqx_layer(nn.Linear(dim, vocab_size, use_bias=False, key=head_key), dtype=dtype)
+        # keep in full precision
+        self.lm_head = nn.Linear(dim, vocab_size, use_bias=False, key=head_key)
 
     def __call__(self, input_ids: jax.Array) -> jax.Array:
         x = self.model(input_ids)
+        x = x.astype(self.lm_head.weight.dtype)
         return jax.vmap(self.lm_head)(x)
 
     # init cache for efficient sampling
@@ -228,3 +231,30 @@ class MambaLLM(eqx.Module):
         _, output_ids = jax.lax.scan(generate_scan, init=(cache, input_ids[-1], key), xs=jnp.arange(gen_len)[:, None])
 
         return jnp.concatenate([input_ids, output_ids])
+
+    # TODO: does this belong here? weakly couples MambaLLM implementation with args in train.py
+    @staticmethod
+    def args_namespace_to_model_kwargs(args):
+        model_kwargs = {
+            "dim": args.dim,
+            "num_layers": args.num_layers,
+            "vocab_size": args.vocab_size,
+            "state_dim": args.state_dim,
+            "kernel_size": args.kernel_size,
+            "expand": args.expand,
+            "dt_rank": args.dt_rank,
+            "dt_min": args.dt_min,
+            "dt_max": args.dt_max,
+            "dt_init": args.dt_init,
+            "dt_scale": args.dt_scale,
+            "dt_init_floor": args.dt_init_floor,
+            "conv_bias": args.no_conv_bias,
+            "bias": args.bias,
+            "kernel_mode": KernelTypeMapping[args.kernel_mode],
+            "pad_vocab_mult": args.pad_vocab_mult,
+            "norm_eps": args.norm_eps,
+            "res_dtype": jnp.bfloat16 if args.res_in_bf16 else jnp.float32,
+            "dtype": jnp.bfloat16 if args.bf16 else jnp.float32,
+        }
+
+        return model_kwargs

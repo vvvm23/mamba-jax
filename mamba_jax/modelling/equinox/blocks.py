@@ -26,7 +26,7 @@ class MambaBlock(eqx.Module):
     out_proj: nn.Linear
 
     dtype: jnp.dtype = jnp.float32
-    use_kernel: bool = False
+    kernel_mode: KernelType = KernelType.XLA
     layer_idx: int = None
     dt_rank: int
     state_dim: int
@@ -45,13 +45,13 @@ class MambaBlock(eqx.Module):
         dt_init_floor: float = 1e-4,
         conv_bias: bool = True,
         bias: bool = False,
-        use_kernel: bool = False,
+        kernel_mode: KernelType = KernelType.XLA,
         layer_idx: int = None,  # used to access cache
         dtype: jnp.dtype = jnp.float32,
         key: jax.random.PRNGKey = None,
     ):
         super().__init__()
-        self.use_kernel = use_kernel
+        self.kernel_mode = kernel_mode
         self.layer_idx = layer_idx
         self.dtype = dtype
         self.state_dim = state_dim
@@ -146,7 +146,7 @@ class MambaBlock(eqx.Module):
             D=self.D.astype(dtype=jnp.float32),
             delta_bias=None,
             delta_softplus=True,
-            mode=KernelType.PALLAS if self.use_kernel else KernelType.XLA,
+            mode=self.kernel_mode,
         )
 
         y = y * jax.nn.silu(z)
@@ -256,7 +256,7 @@ def create_block(
     dt_init_floor: float = 1e-4,
     conv_bias: bool = True,
     bias: bool = False,
-    use_kernel: bool = False,
+    kernel_mode: KernelType = KernelType.XLA,
     layer_idx: int = None,
     norm_eps: float = 1e-5,
     # TODO: add norm type
@@ -278,7 +278,7 @@ def create_block(
         dt_init_floor=dt_init_floor,
         conv_bias=conv_bias,
         bias=bias,
-        use_kernel=use_kernel,
+        kernel_mode=kernel_mode,
         layer_idx=layer_idx,
     )
 

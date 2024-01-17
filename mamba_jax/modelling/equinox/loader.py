@@ -8,6 +8,7 @@ import torch  # TODO: can remove dependency once mamba converted to safetensors
 from huggingface_hub import hf_hub_download
 from transformers import AutoTokenizer
 
+from ...kernels.interface import KernelType
 from .model import MambaLLM
 
 
@@ -36,15 +37,14 @@ def pt_to_raw_pytree(sd, dtype: Optional[jnp.dtype] = jnp.float32):
 
 def init_mamba_from_raw_pytree(tree, config):
     # TODO: add fused add norm and norm type options
-    N = config["d_model"]
-    num_layers = config["n_layer"]
-    vocab_size = config["vocab_size"]
+    # TODO: double check not missing any args
     model = MambaLLM(
-        N,
-        num_layers,
-        vocab_size,
+        config["d_model"],
+        config["n_layer"],
+        config["vocab_size"],
         res_dtype=jnp.float32 if config["residual_in_fp32"] else jnp.bfloat16,
         pad_vocab_mult=config["pad_vocab_size_multiple"],
+        kernel_mode=config["kernel_mode"],
         key=jax.random.PRNGKey(0),
         dtype=config["dtype"],
     )
@@ -81,8 +81,9 @@ def init_mamba_from_raw_pytree(tree, config):
     return model
 
 
-def load_pretrained(model, dtype: jnp.dtype = jnp.float32):
+def load_pretrained(model, dtype: jnp.dtype = jnp.float32, kernel_mode: KernelType = KernelType.XLA):
     sd, config = get_pt_checkpoint(model)
+    config["kernel_mode"] = kernel_mode
     config["dtype"] = dtype
     tree = pt_to_raw_pytree(sd, dtype=config["dtype"])
     model = init_mamba_from_raw_pytree(tree, config)

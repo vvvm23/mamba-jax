@@ -1,14 +1,77 @@
 import argparse
+import json
+import string
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
+from transformers import AutoTokenizer
 
+from mamba_jax.kernels import KernelTypeMapping
+from mamba_jax.modelling.equinox import MambaLLM
 from mamba_jax.modelling.equinox.loader import load_pretrained
 
 
+# simple tokenizer for Text8 generation task
+class Text8Tokenizer:
+    def __init__(self):
+        lower, upper = string.ascii_lowercase[0], string.ascii_lowercase[-1]
+        self.lower, self.upper = ord(lower), ord(upper)
+        self.space = self.upper + 1
+
+        self.eos_token_id = -1
+
+    def __call__(self, prompt, *args, **kwargs):
+        prompt = prompt.lower()
+        assert all(c in string.ascii_lowercase + " " for c in prompt)
+
+        bytes = np.array([ord(c) for c in prompt], dtype=int)
+        bytes[bytes == ord(" ")] = self.space
+        input_ids = bytes - self.lower
+
+        return SimpleNamespace(input_ids=[input_ids])
+
+    def decode(self, input_ids, *args, **kwargs):
+        if isinstance(input_ids, list):
+            bytes = [input_ids[0] + self.lower]
+        else:
+            bytes = input_ids + self.lower
+        decoded = "".join([chr(b) if b != self.space else " " for b in bytes])
+
+        return decoded
+
+
+def load_local_model(args):
+    with open(args.config, mode="r") as f:
+        config = json.load(f)
+
+    config = SimpleNamespace(**config)
+
+    # TODO: move this under a 'model_config' sub-dictionary so we can just do **config.model_config
+    model_kwargs = MambaLLM.args_namespace_to_model_kwargs(config)
+    model = MambaLLM(**model_kwargs, key=jax.random.PRNGKey(0))
+    model = eqx.tree_deserialise_leaves(args.model, like=model)
+
+    # tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
+    # TODO: for now, the training script only trains on text8, so we just use
+    # tokeniser for that, which can be a simple function
+    tokenizer = Text8Tokenizer()
+
+    return model, tokenizer
+
+
 def main(args):
-    model, tokenizer = load_pretrained(args.model, dtype=jnp.bfloat16 if args.bf16 else jnp.float32)
+    # TODO: make this more robust as future models may not be under state-spaces namespace
+    if args.model.startswith("state-spaces"):
+        model, tokenizer = load_pretrained(
+            args.model,
+            dtype=jnp.bfloat16 if args.bf16 else jnp.float32,
+            kernel_mode=KernelTypeMapping[args.kernel_mode],
+        )
+    else:  # is probably local model
+        model, tokenizer = load_local_model(args)
 
     prompt = args.prompt
 
@@ -38,7 +101,7 @@ def main(args):
         print()
         print(tokenizer.decode(input_ids, skip_special_tokens=True), flush=True, end="")
 
-        # prefill
+        # "prefill"
         for input_id in input_ids[:-1]:
             _, cache = generate_step(input_id, cache=cache)
 
@@ -62,9 +125,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--prompt", type=str, default="Aloha, World! ", help="Starting prompt for generation.")
     parser.add_argument(
-        "--model", type=str, default="state-spaces/mamba-2.8b", help="Model repo id as on Huggingface Hub."
+        "--model",
+        type=str,
+        default="state-spaces/mamba-2.8b",
+        help="Local JAX model checkpoint or PyTorch model repo id as on Huggingface Hub.",
     )
-    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 for inference")
+    parser.add_argument(
+        "--config", type=str, default=None, help="Path to model config file if using a local JAX model checkpoint."
+    )
+    parser.add_argument(
+        "--bf16",
+        action="store_true",
+        help="Use bfloat16 for inference. If using `--config` the value there will overwrite this flag.",
+    )
     parser.add_argument("--gen_len", type=int, default=1024, help="Length of generated sequence.")
     parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for PRNG initialisation.")
