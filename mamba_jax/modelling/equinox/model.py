@@ -187,10 +187,12 @@ class MambaLLM(eqx.Module):
             key=model_key,
         )
 
-        self.lm_head = cast_eqx_layer(nn.Linear(dim, vocab_size, use_bias=False, key=head_key), dtype=dtype)
+        # keep in full precision
+        self.lm_head = nn.Linear(dim, vocab_size, use_bias=False, key=head_key)
 
     def __call__(self, input_ids: jax.Array) -> jax.Array:
         x = self.model(input_ids)
+        x = x.astype(self.lm_head.weight.dtype)
         return jax.vmap(self.lm_head)(x)
 
     # init cache for efficient sampling
