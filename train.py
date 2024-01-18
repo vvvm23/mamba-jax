@@ -271,6 +271,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset", type=str, default="afmck/text8-chunked1024", help="Dataset to use as on Huggingface hub."
     )
+    parser.add_argument("--dataset_subset", type=str, default=None, help="Subset of dataset to use.")
+    parser.add_argument(
+        "--dataset_text_field", type=str, default="text", help="Name of text field in dataset to tokenize."
+    )
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument(
         "--micro_batch_size",
