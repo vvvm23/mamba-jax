@@ -54,10 +54,12 @@ def load_local_model(args):
     model = MambaLLM(**model_kwargs, key=jax.random.PRNGKey(0))
     model = eqx.tree_deserialise_leaves(args.model, like=model)
 
-    # tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
     # TODO: for now, the training script only trains on text8, so we just use
     # tokeniser for that, which can be a simple function
-    tokenizer = Text8Tokenizer()
+    if args.text8_tokenizer:
+        tokenizer = Text8Tokenizer()
+    else:
+        tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
 
     return model, tokenizer
 
@@ -143,6 +145,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Random seed for PRNG initialisation.")
     parser.add_argument("--seed_iters", type=int, default=1, help="Number of seeds to generate, starting from --seed.")
     parser.add_argument("--scan", action="store_true", help="Use jax.lax.scan version of generate loop.")
+    parser.add_argument(
+        "--text8_tokenizer", action="store_true", help="Use the text8 tokenizer. Only use for models trained on text8"
+    )
     args = parser.parse_args()
 
     main(args)
