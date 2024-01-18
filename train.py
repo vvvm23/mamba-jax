@@ -275,7 +275,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset_text_field", type=str, default="text", help="Name of text field in dataset to tokenize."
     )
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
+    parser.add_argument(
+        "--validation_split_size", type=float, default=0.1, help="Size of validation split as a percentage."
+    )
     parser.add_argument(
         "--micro_batch_size",
         type=int,
@@ -286,6 +288,7 @@ if __name__ == "__main__":
     parser.add_argument("--sequence_length", type=int, default=1024, help="Sequence length for training.")
 
     # optimiser args
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--learning_rate", type=float, default=6e-4, help="Initial learning rate after warmup phase.")
     parser.add_argument("--end_learning_rate", type=float, default=1e-6, help="End learning rate.")
     parser.add_argument("--warmup_start_lr", type=float, default=1e-5, help="Warmup start learning rate.")

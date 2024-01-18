@@ -83,7 +83,9 @@ def setup_hf_dataset(args, dataset_text_field: Optional[str] = None):
 
     # assumes we only have a train split
     if "validation" not in dataset.keys():
-        dataset = dataset["train"].train_test_split(test_size=0.1)  # TODO: make this size configurable
+        dataset = dataset["train"].train_test_split(
+            test_size=args.validation_split_size
+        )  # TODO: make this size configurable
         dataset["validation"] = dataset["test"]
         del dataset["test"]
 
@@ -94,7 +96,7 @@ def setup_hf_dataset(args, dataset_text_field: Optional[str] = None):
     dataset = dataset.remove_columns([col for col in dataset["train"].column_names if col != "input_ids"])
     dataset.set_format("np")
 
-    return dataset
+    return dataset["train"], dataset["validation"]
 
 
 def get_tokenizer(args):
