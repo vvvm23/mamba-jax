@@ -76,7 +76,6 @@ def create_step_fn(args, model, optimiser):
     opt_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
 
     def loss_fn(model, batch):
-        # TODO: fix this as this actually results in -1 the sequence length
         input_ids, labels = jnp.copy(batch[:, :-1]), jnp.copy(batch[:, 1:])
         logits = jax.vmap(model[0])(input_ids)
         num_tokens = (labels != -100).sum()
