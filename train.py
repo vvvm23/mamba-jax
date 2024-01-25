@@ -291,7 +291,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--learning_rate", type=float, default=6e-4, help="Initial learning rate after warmup phase.")
     parser.add_argument("--end_learning_rate", type=float, default=1e-6, help="End learning rate.")
-    parser.add_argument("--warmup_start_lr", type=float, default=1e-5, help="Warmup start learning rate.")
+    parser.add_argument("--warmup_start_lr", type=float, default=1e-7, help="Warmup start learning rate.")
     parser.add_argument(
         "--warmup_proportion", type=float, default=0.1, help="Proportion of warmup steps out of total steps."
     )

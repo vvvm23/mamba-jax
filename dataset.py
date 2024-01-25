@@ -62,7 +62,7 @@ def setup_text8_dataset(args, dataset_text_field: Optional[str] = None):
 
     def transform_fn(batch):
         batch = batch[dataset_text_field]
-        batch = [example.ljust(args.sequence_length + 1) for example in batch]
+        batch = [example[0].ljust(args.sequence_length + 1) for example in batch]
         bytes = torch.tensor([[ord(c) for c in example] for example in batch], dtype=int)
         bytes[bytes == ord(" ")] = space_or_pad
         input_ids = bytes - lower
